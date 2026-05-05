@@ -1272,6 +1272,10 @@ function renderParentsSection(all) {
       : '';
 
     const msgInline = renderInlineMsgFor(p.id);
+    const lanePayable = getMaxLastClassDate(children);
+    const lanePayableHtml = lanePayable
+      ? `<span class="student-payable" title="此分組內最晚的可請款日">📅 ${formatPayableDate(lanePayable)} 後</span>`
+      : '';
 
     return `
       <div class="parent-lane" id="parent-lane-${p.id}"
@@ -1281,6 +1285,7 @@ function renderParentsSection(all) {
         <div class="parent-lane-header">
           <span class="parent-name" onclick="renameParent('${p.id}')" title="點擊改名">${escapeHtml(p.name)}</span>
           <span class="parent-meta">${children.length} 位學生 ${danglingHtml}</span>
+          ${lanePayableHtml}
           <div class="parent-actions">
             <button class="btn-generate" onclick="generateForParent('${p.id}')">產出訊息</button>
             <button class="btn-mini" onclick="renameParent('${p.id}')">改名</button>
