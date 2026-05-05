@@ -177,6 +177,27 @@ section.team h2 { border-left-color: #3498db; }
 .student-row.billed .student-name { text-decoration: line-through; color: #999; }
 .student-chip.billed { opacity: 0.45; background: #f0f0f0; }
 .student-chip.billed .chip-name { text-decoration: line-through; color: #999; }
+
+/* owner 色票:粉紅 = 老婆請款(預設) / 淺藍 = 老公請款 */
+.student-row.owner-wife { background: #fdedf0; }
+.student-row.owner-me   { background: #e3f2fd; }
+.student-row.billed { background: #f0f0f0; }   /* billed 蓋過 owner 色 */
+.parent-lane.owner-wife { background: #fdedf0; border-color: #f5b7c4; }
+.parent-lane.owner-me   { background: #e3f2fd; border-color: #90caf9; }
+.owner-toggle {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 0.78em; color: #555; cursor: pointer; user-select: none;
+  white-space: nowrap; flex: 0 0 auto;
+}
+.owner-toggle input { margin: 0; cursor: pointer; }
+.cell-name {
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0;
+}
+.cell-name .student-name {
+  flex: 0 1 auto; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .students-pool.dragover { background: #fdf8e3; }
 
 /* Pool stacked layout (Personal 上 / Team 下) */
@@ -234,6 +255,8 @@ section.team h2 { border-left-color: #3498db; }
   font-size: 0.85em; text-align: right; min-width: 0;
 }
 .rate-input:focus { outline: none; border-color: #9b59b6; }
+.cell-math .rate-input { background: #fdedf0; border-color: #f5b7c4; }   /* Math = 老婆,粉紅 */
+.cell-sci  .rate-input { background: #e3f2fd; border-color: #90caf9; }   /* Sci  = 我,淺藍 */
 .btn-row-generate {
   font-size: 0.78em; padding: 4px 6px; border: none;
   background: #27ae60; color: white; border-radius: 4px; cursor: pointer;
@@ -446,6 +469,7 @@ const TB_ASSIGNMENTS = 'tb_assignments_v1';
 const TB_SPLITS = 'tb_splits_v1';
 const TB_RENAMES = 'tb_renames_v1';
 const TB_BILLED = 'tb_billed_v1';
+const TB_BILLING_OWNER = 'tb_billing_owner_v1';
 
 // ===== Firebase setup (cross-device sync) =====
 // Same Realtime DB as personal/team versions (project: tutor-billing-sync),
@@ -462,7 +486,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const fbDb = firebase.database();
 const FIXED_ROOM = 'MERGED_SYNC';
-const SYNC_KEYS = [TB_PERSONAL_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_BILLED, TB_TEAM_RAW];
+const SYNC_KEYS = [TB_PERSONAL_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_BILLED, TB_BILLING_OWNER, TB_TEAM_RAW];
 let _skipSync = false;
 
 function pushToFirebase(key, data) {
@@ -487,6 +511,7 @@ function applySyncedValue(key, value) {
   else if (key === TB_SPLITS) loadSplits();
   else if (key === TB_RENAMES) loadRenames();
   else if (key === TB_BILLED) loadBilled();
+  else if (key === TB_BILLING_OWNER) loadBillingOwner();
   else if (key === TB_TEAM_RAW) restoreTeamRaw();
   // TB_PERSONAL_RATES is read on demand via loadPersonalRates(), no in-memory cache
   _skipSync = false;
@@ -579,6 +604,26 @@ function setBilledForStudents(studentKeys, checked) {
 function isMessageBilled(m) {
   if (!m.studentKeys || m.studentKeys.length === 0) return false;
   return m.studentKeys.every(k => isStudentBilled(k));
+}
+
+// ===== Billing Owner (誰請款) — 預設 'wife';勾選為 'me' =====
+let billingOwner = {}; // { studentKey: 'me' | 'wife' }
+function loadBillingOwner() {
+  try { billingOwner = JSON.parse(localStorage.getItem(TB_BILLING_OWNER)) || {}; }
+  catch { billingOwner = {}; }
+}
+function saveBillingOwner() {
+  try { localStorage.setItem(TB_BILLING_OWNER, JSON.stringify(billingOwner)); } catch {}
+  pushToFirebase(TB_BILLING_OWNER, billingOwner);
+}
+function getBillingOwner(studentKey) {
+  return billingOwner[studentKey] === 'me' ? 'me' : 'wife';
+}
+function setBillingOwnerFor(studentKey, isMe) {
+  if (isMe) billingOwner[studentKey] = 'me';
+  else delete billingOwner[studentKey]; // 預設 wife → 沒寫入也代表 wife
+  saveBillingOwner();
+  renderAll();
 }
 
 function renameSource(sourceKey, originalName) {
@@ -1276,14 +1321,21 @@ function renderParentsSection(all) {
     const lanePayableHtml = lanePayable
       ? `<span class="student-payable" title="此分組內最晚的可請款日">📅 ${formatPayableDate(lanePayable)} 後</span>`
       : '';
+    const owner = getBillingOwner(p.id);
+    const ownerClass = ' owner-' + owner;
+    const ownerToggle = `<label class="owner-toggle" onclick="event.stopPropagation()" title="勾起來=老公請款">
+      <input type="checkbox" ${owner === 'me' ? 'checked' : ''}
+        onchange="setBillingOwnerFor('${escapeAttr(p.id)}', this.checked)">老公
+    </label>`;
 
     return `
-      <div class="parent-lane" id="parent-lane-${p.id}"
+      <div class="parent-lane${ownerClass}" id="parent-lane-${p.id}"
            ondragover="onLaneDragOver(event, '${p.id}')"
            ondragleave="onLaneDragLeave(event)"
            ondrop="onLaneDrop(event, '${p.id}')">
         <div class="parent-lane-header">
           <span class="parent-name" onclick="renameParent('${p.id}')" title="點擊改名">${escapeHtml(p.name)}</span>
+          ${ownerToggle}
           <span class="parent-meta">${children.length} 位學生 ${danglingHtml}</span>
           ${lanePayableHtml}
           <div class="parent-actions">
@@ -1354,6 +1406,8 @@ function renderUnassignedPool(all, year, month) {
 
   function rowHtml(s) {
     const billedClass = isStudentBilled(s.key) ? ' billed' : '';
+    const owner = getBillingOwner(s.key);
+    const ownerClass = ' owner-' + owner;
     const lastDate = getLastClassDate(s);
     const payableHtml = lastDate
       ? `<span class="student-payable" title="可請款日(該學生本月最後上課日)">📅 ${formatPayableDate(lastDate)} 後</span>`
@@ -1361,13 +1415,20 @@ function renderUnassignedPool(all, year, month) {
     const splitTag = s.source === 'split'
       ? ' <span class="source-tag '+s.tagClass+'" style="font-size:0.7em;">分身</span>'
       : '';
+    const ownerToggle = `<label class="owner-toggle" onclick="event.stopPropagation()" title="勾起來=老公請款">
+      <input type="checkbox" ${owner === 'me' ? 'checked' : ''}
+        onchange="setBillingOwnerFor('${escapeAttr(s.key)}', this.checked)">老公
+    </label>`;
     const msgInline = renderInlineMsgFor('student:' + s.key);
     return `
-      <div class="student-row${billedClass}" id="student-row-${safeId(s.key)}" draggable="true"
+      <div class="student-row${billedClass}${ownerClass}" id="student-row-${safeId(s.key)}" draggable="true"
            data-key="${escapeAttr(s.key)}"
            ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
            ondragend="onChipDragEnd(event)">
-        <span class="cell-name student-name">${escapeHtml(s.displayName)}${splitTag}</span>
+        <span class="cell-name">
+          <span class="student-name">${escapeHtml(s.displayName)}${splitTag}</span>
+          ${ownerToggle}
+        </span>
         <span class="cell-info">${s.count}堂 · ${formatNum(s.totalHours)}hr</span>
         ${payableHtml}
         <span class="cell-math">${renderMathCell(s)}</span>
@@ -1831,6 +1892,7 @@ function deleteMessage(parentId) {
   loadSplits();
   loadRenames();
   loadBilled();
+  loadBillingOwner();
   const hasPersonal = restorePersonalRaw();
   const hasTeam = restoreTeamRaw();
   if (hasPersonal || hasTeam) onDataUpdated();
