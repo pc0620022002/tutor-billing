@@ -179,14 +179,14 @@ section.team h2 { border-left-color: #3498db; }
 .student-chip.billed .chip-name { text-decoration: line-through; color: #999; }
 .students-pool.dragover { background: #fdf8e3; }
 
-/* Pool two-column layout (Personal | Team) */
+/* Pool stacked layout (Personal 上 / Team 下) */
 .pool-columns {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  display: flex; flex-direction: column; gap: 12px;
   margin-top: 8px;
 }
 .pool-column {
   background: #fafafa; border-radius: 8px; padding: 10px;
-  min-height: 100px; border: 1px dashed transparent;
+  min-height: 80px; border: 1px dashed transparent;
   transition: border-color 0.15s, background 0.15s;
 }
 .pool-column.dragover { border-color: #f39c12; background: #fef9e7; }
@@ -195,26 +195,65 @@ section.team h2 { border-left-color: #3498db; }
   margin-bottom: 8px; padding-bottom: 6px;
   border-bottom: 1px solid #eee;
 }
-.pool-column-list { min-height: 60px; }
+.pool-column-list { overflow-x: auto; }
 .pool-column-list .student-row {
-  padding: 8px 6px; gap: 6px;
+  display: grid;
+  grid-template-columns:
+    minmax(95px, 1fr)     /* 學生名 + 分身 tag,吃剩餘空間 */
+    72px                  /* 堂數 · 時數 */
+    78px                  /* 可請款日 */
+    72px                  /* Math 時薪 */
+    72px                  /* Sci 時薪 */
+    50px                  /* 改名 */
+    52px                  /* 一對多/刪除 */
+    78px                  /* 分到 dropdown */
+    44px;                 /* 產出 */
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  flex-wrap: unset; /* override .student-row 原本 flex 設定 */
+  min-width: 660px;
+  font-size: 0.85em;
 }
-.pool-column-list .student-row .student-name { min-width: 0; }
-.pool-column-list .student-row .student-info { flex: 0 1 auto; }
+.pool-column-list .cell-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 600;
+}
+.pool-column-list .cell-info,
+.pool-column-list .cell-rate-text {
+  font-size: 0.85em; color: #555; white-space: nowrap;
+}
+.student-payable {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 0.74em; color: #b9770e;
+  background: #fef9e7; border: 1px solid #f9e79f;
+  padding: 2px 4px; border-radius: 8px; text-align: center;
+}
+.rate-input {
+  width: 100%; padding: 3px 4px; border: 1px solid #ddd; border-radius: 4px;
+  font-size: 0.85em; text-align: right; min-width: 0;
+}
+.rate-input:focus { outline: none; border-color: #9b59b6; }
 .btn-row-generate {
-  font-size: 0.78em; padding: 4px 10px; border: none;
+  font-size: 0.78em; padding: 4px 6px; border: none;
   background: #27ae60; color: white; border-radius: 4px; cursor: pointer;
+  width: 100%;
 }
 .btn-row-generate:hover { background: #1e8449; }
 .quick-assign {
-  padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px;
+  padding: 3px 4px; border: 1px solid #ddd; border-radius: 4px;
   font-size: 0.78em; background: white; cursor: pointer;
-  max-width: 110px;
+  width: 100%; min-width: 0;
 }
 .quick-assign:hover { border-color: #8e44ad; }
-@media (max-width: 700px) {
-  .pool-columns { grid-template-columns: 1fr; }
+.pool-column-list .btn-mini {
+  width: 100%; padding: 3px 4px; font-size: 0.78em;
 }
+
+/* Inline message card under student row / parent lane */
+.inline-msg-slot { margin: 8px 0; }
+.inline-msg-slot:empty { display: none; }
+.inline-msg-slot .msg-card { margin-bottom: 0; }
 
 /* Generate buttons inside parent lanes */
 .btn-generate {
@@ -372,13 +411,6 @@ section.team h2 { border-left-color: #3498db; }
     <div class="parent-lanes" id="parentLanes"></div>
   </section>
 
-  <section class="results-section" id="resultsSection">
-    <div class="results-header">
-      <h2>📨 請款訊息</h2>
-    </div>
-    <div class="results-count" id="resultsCount"></div>
-    <div id="msgList"></div>
-  </section>
 
   <section class="students-pool" id="studentsPool">
     <h2>👥 學生池(未分配)</h2>
@@ -1239,6 +1271,8 @@ function renderParentsSection(all) {
       ? `<span style="color:#aaa;font-size:0.78em;">(本月無資料學生 ${danglingCount} 位已隱藏)</span>`
       : '';
 
+    const msgInline = renderInlineMsgFor(p.id);
+
     return `
       <div class="parent-lane" id="parent-lane-${p.id}"
            ondragover="onLaneDragOver(event, '${p.id}')"
@@ -1255,8 +1289,16 @@ function renderParentsSection(all) {
         </div>
         <div class="parent-students">${chipsHtml}</div>
       </div>
+      <div class="inline-msg-slot">${msgInline}</div>
     `;
   }).join('');
+}
+
+function renderInlineMsgFor(keyId) {
+  // keyId = parent.id 或 'student:' + studentKey
+  const m = _generatedMessages[keyId];
+  if (!m) return '';
+  return makeMsgCardHTML(keyId, m);
 }
 
 function makeStudentChip(s) {
@@ -1307,19 +1349,30 @@ function renderUnassignedPool(all, year, month) {
 
   function rowHtml(s) {
     const billedClass = isStudentBilled(s.key) ? ' billed' : '';
+    const lastDate = getLastClassDate(s);
+    const payableHtml = lastDate
+      ? `<span class="student-payable" title="可請款日(該學生本月最後上課日)">📅 ${formatPayableDate(lastDate)} 後</span>`
+      : `<span></span>`;
+    const splitTag = s.source === 'split'
+      ? ' <span class="source-tag '+s.tagClass+'" style="font-size:0.7em;">分身</span>'
+      : '';
+    const msgInline = renderInlineMsgFor('student:' + s.key);
     return `
-      <div class="student-row${billedClass}" draggable="true"
+      <div class="student-row${billedClass}" id="student-row-${safeId(s.key)}" draggable="true"
            data-key="${escapeAttr(s.key)}"
            ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
            ondragend="onChipDragEnd(event)">
-        <span class="student-name">${escapeHtml(s.displayName)}${s.source === 'split' ? ' <span class="source-tag '+s.tagClass+'" style="font-size:0.7em;">分身</span>' : ''}</span>
-        <span class="student-info">${s.count}堂 · ${formatNum(s.totalHours)}hr</span>
-        ${renderRateColumn(s)}
-        ${renderFeeColumn(s)}
-        ${renderRowTools(s)}
+        <span class="cell-name student-name">${escapeHtml(s.displayName)}${splitTag}</span>
+        <span class="cell-info">${s.count}堂 · ${formatNum(s.totalHours)}hr</span>
+        ${payableHtml}
+        <span class="cell-math">${renderMathCell(s)}</span>
+        <span class="cell-sci">${renderSciCell(s)}</span>
+        <span class="cell-rename">${renderRenameCell(s)}</span>
+        <span class="cell-action">${renderActionCell(s)}</span>
         ${renderQuickAssign(s)}
         <button class="btn-row-generate" onclick="generateForStudent('${escapeAttr(s.key)}')" title="單獨產出此學生的請款訊息">產出</button>
       </div>
+      <div class="inline-msg-slot">${msgInline}</div>
     `;
   }
 
@@ -1334,48 +1387,42 @@ function renderUnassignedPool(all, year, month) {
   stats.textContent = `${year}年${month}月:全部 ${all.length} 位 / 已分配 ${totalAssigned} 位 / 未分配 ${unassigned.length} 位(Personal ${personalOnes.length} / Team ${teamOnes.length})`;
 }
 
-function renderRateColumn(s) {
+function renderMathCell(s) {
   if (s.sourceType === 'team') {
-    return `<span class="student-rate">時薪 ${s.rate}</span>`;
+    // Team 學生:把時薪顯示在 Math cell(不可改)
+    return `<span class="cell-rate-text">時薪 ${s.rate}</span>`;
   }
-  const rateCanonical = s.rateCanonical;
-  const mathRate = getPersonalRate(rateCanonical, 'math');
-  const sciRate = getPersonalRate(rateCanonical, 'sci');
-  let html = '<div class="student-rate-inputs">';
-  if (s.isMath) {
-    html += `<label>Math</label><input type="number" min="0" placeholder="時薪"
-      value="${mathRate ?? ''}" data-canonical="${escapeAttr(rateCanonical)}" data-subject="math"
-      onchange="onPersonalRateChange(this)">`;
-  }
-  if (s.isSci) {
-    html += `<label>Sci</label><input type="number" min="0" placeholder="時薪"
-      value="${sciRate ?? ''}" data-canonical="${escapeAttr(rateCanonical)}" data-subject="sci"
-      onchange="onPersonalRateChange(this)">`;
-  }
-  html += '</div>';
-  return html;
+  if (!s.isMath) return '';
+  const r = getPersonalRate(s.rateCanonical, 'math');
+  return `<input class="rate-input" type="number" min="0" placeholder="Math 時薪"
+    value="${r ?? ''}" data-canonical="${escapeAttr(s.rateCanonical)}" data-subject="math"
+    onchange="onPersonalRateChange(this)">`;
 }
 
-function renderFeeColumn(s) {
-  // 產出訊息前不顯示金額,訊息卡片裡才會帶總額
+function renderSciCell(s) {
+  if (s.sourceType === 'team') return '';
+  if (!s.isSci) return '';
+  const r = getPersonalRate(s.rateCanonical, 'sci');
+  return `<input class="rate-input" type="number" min="0" placeholder="Sci 時薪"
+    value="${r ?? ''}" data-canonical="${escapeAttr(s.rateCanonical)}" data-subject="sci"
+    onchange="onPersonalRateChange(this)">`;
+}
+
+function renderRenameCell(s) {
+  if (s.source === 'split') {
+    return `<button class="btn-mini" onclick="renameSplit('${s.key}')">改名</button>`;
+  }
+  if (hasBeenSplit(s.sourceKey)) {
+    return `<button class="btn-mini" onclick="renameSource('${escapeAttr(s.sourceKey)}', '${escapeAttr(s.originalName)}')">改名</button>`;
+  }
   return '';
 }
 
-function renderRowTools(s) {
+function renderActionCell(s) {
   if (s.source === 'split') {
-    return `<span style="display:flex;gap:4px;">
-      <button class="btn-mini" onclick="renameSplit('${s.key}')">改名</button>
-      <button class="btn-mini danger" onclick="deleteSplit('${s.key}')">刪除</button>
-    </span>`;
+    return `<button class="btn-mini danger" onclick="deleteSplit('${s.key}')">刪除</button>`;
   }
-  // 原學生:按過一對多才顯示「改名」(否則只有一筆,改名沒實際必要,徒增雜訊)
-  const renameBtn = hasBeenSplit(s.sourceKey)
-    ? `<button class="btn-mini" onclick="renameSource('${escapeAttr(s.sourceKey)}', '${escapeAttr(s.originalName)}')">改名</button>`
-    : '';
-  return `<span style="display:flex;gap:4px;">
-    ${renameBtn}
-    <button class="btn-mini" onclick="splitStudent('${s.key}')" title="新增此學生的另一筆(分到不同家長)">一對多</button>
-  </span>`;
+  return `<button class="btn-mini" onclick="splitStudent('${s.key}')" title="新增此學生的另一筆(分到不同家長)">一對多</button>`;
 }
 
 function renderQuickAssign(s) {
@@ -1556,7 +1603,7 @@ function safeId(s) {
 function buildSingleStudentMessage(c, month, greeting) {
   const momTitle = getMomTitle();
   const recipientLabel = getRecipientLabel(c.displayName);
-  let msg = `${momTitle}${greeting},以下和您確認${month}月 ${c.displayName} 同學的上課時數:\n\n`;
+  let msg = `${momTitle}${greeting},以下和您確認${month}月的上課時數:\n\n`;
   const sec = c.sourceType === 'personal'
     ? buildPersonalSection(c, false)
     : buildTeamSection(c, false);
@@ -1568,11 +1615,6 @@ function buildSingleStudentMessage(c, month, greeting) {
     msg += `\n教材費:${materialFee}元`;
     grand = sec.totalFee + materialFee;
     msg += `\n合計:${grand}元`;
-  }
-  // 可請款日
-  const lastDate = getLastClassDate(c);
-  if (lastDate) {
-    msg += `\n\n可請款日:${formatPayableDate(lastDate)} 後`;
   }
   msg += `,謝謝${momTitle}`;
   return { recipientLabel, msg, totalFee: grand, totalHrs: sec.totalHrs, count: sec.count };
@@ -1619,10 +1661,7 @@ function buildMessageForParent(parentId, all) {
       }
     });
     const grand = totalFee + totalMat;
-    msg += `\n合計:${grand}元`;
-    const lastDate = getMaxLastClassDate(children);
-    if (lastDate) msg += `\n可請款日:${formatPayableDate(lastDate)} 後`;
-    msg += `,謝謝${momTitle}`;
+    msg += `\n合計:${grand}元,謝謝${momTitle}`;
     totalFee = grand;
   } else {
     const built = buildSingleStudentMessage(children[0], month, greeting);
@@ -1646,7 +1685,7 @@ function generateForParent(parentId) {
   if (!result) return;
   if (result.error) { showToast(result.error); return; }
   _generatedMessages[parentId] = result;
-  renderMessages();
+  renderAll();  // re-render lanes (含 inline-msg-slot)
   showToast(`已產出 ${result.name} 的請款訊息`);
   setTimeout(() => {
     const card = document.getElementById('msg-card-' + safeId(parentId));
@@ -1671,7 +1710,7 @@ function generateForStudent(studentKey) {
     isFamily: false,
     studentKeys: [c.key]
   };
-  renderMessages();
+  renderAll();  // re-render pool (含 inline-msg-slot)
   showToast(`已產出 ${c.displayName} 的請款訊息`);
   setTimeout(() => {
     const card = document.getElementById('msg-card-' + safeId(storeKey));
@@ -1687,7 +1726,6 @@ function generateAllMessages() {
   const [, month] = getSelectedYM();
   const greeting = getGreeting();
 
-  // 1. 家長分組
   parents.forEach(p => {
     const result = buildMessageForParent(p.id, all);
     if (!result) return;
@@ -1699,7 +1737,6 @@ function generateAllMessages() {
     count++;
   });
 
-  // 2. 學生池中沒分組的(每位獨立一則)
   all.filter(s => !assignments[s.key]).forEach(c => {
     const errMsg = validateRatesForChildren([c]);
     if (errMsg) {
@@ -1712,7 +1749,8 @@ function generateAllMessages() {
       parentId: storeKey, parentName: built.recipientLabel,
       name: c.displayName, msg: built.msg,
       totalFee: built.totalFee, totalHours: built.totalHrs, count: built.count,
-      isFamily: false
+      isFamily: false,
+      studentKeys: [c.key]
     };
     count++;
   });
@@ -1721,23 +1759,8 @@ function generateAllMessages() {
     showToast(firstError || '沒有可產出的訊息');
     return;
   }
-  renderMessages();
+  renderAll();
   showToast(`已產出 ${count} 則訊息` + (firstError ? `(部分跳過:${firstError})` : ''));
-  document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
-}
-
-function renderMessages() {
-  const section = document.getElementById('resultsSection');
-  const list = document.getElementById('msgList');
-  const countEl = document.getElementById('resultsCount');
-  const entries = Object.entries(_generatedMessages);
-  if (entries.length === 0) {
-    section.style.display = 'none';
-    return;
-  }
-  section.style.display = 'block';
-  countEl.textContent = `已產出 ${entries.length} 則`;
-  list.innerHTML = entries.map(([pid, m]) => makeMsgCardHTML(pid, m)).join('');
 }
 
 function makeMsgCardHTML(parentId, m) {
@@ -1773,8 +1796,7 @@ function setMessageBilled(parentId, checked) {
   const m = _generatedMessages[parentId];
   if (!m || !m.studentKeys) return;
   setBilledForStudents(m.studentKeys, checked);
-  renderMessages();
-  renderAll(); // 學生池也要重 render 反映淺色狀態
+  renderAll();
 }
 
 function toggleMsgBody(parentId) {
@@ -1793,7 +1815,7 @@ function copyMessage(btn, parentId) {
 
 function deleteMessage(parentId) {
   delete _generatedMessages[parentId];
-  renderMessages();
+  renderAll();
 }
 
 // ===== Init =====
