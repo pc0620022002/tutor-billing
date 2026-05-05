@@ -1711,8 +1711,12 @@ function buildMessageForParent(parentId, all) {
   if (isFamily) {
     msg = `${momTitle}${greeting},以下和您確認${month}月的上課時數:\n`;
     let totalMat = 0;
+    const hasPersonal = children.some(c => c.sourceType === 'personal');
+    const hasTeam = children.some(c => c.sourceType === 'team');
+    const isMixed = hasPersonal && hasTeam;
     children.forEach(c => {
-      msg += `\n【${c.displayName}】\n`;
+      const teamSuffix = (isMixed && c.sourceType === 'team') ? ' (team)' : '';
+      msg += `\n【${c.displayName}${teamSuffix}】\n`;
       const sec = c.sourceType === 'personal'
         ? buildPersonalSection(c, true)
         : buildTeamSection(c, true);
