@@ -1,0 +1,1702 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>家教請款訊息產生器（合併版）</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", sans-serif;
+  background: #f0f2f5; color: #333; min-height: 100vh;
+}
+.container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+h1 { text-align: center; font-size: 1.6em; margin: 20px 0 8px; color: #2c3e50; }
+.subtitle { text-align: center; color: #7f8c8d; margin-bottom: 24px; font-size: 0.9em; }
+
+.round-banner {
+  background: #fef9e7; border: 1px solid #f9e79f; border-radius: 8px;
+  padding: 10px 16px; margin-bottom: 20px; font-size: 0.85em; color: #7d6608;
+  text-align: center;
+}
+
+section { margin-bottom: 24px; }
+section h2 {
+  font-size: 1.05em; color: #2c3e50; margin-bottom: 10px;
+  border-left: 4px solid #9b59b6; padding-left: 10px;
+}
+section.team h2 { border-left-color: #3498db; }
+
+/* Upload area */
+.upload-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.upload-box {
+  flex: 1; min-width: 240px;
+  border: 2px dashed #bdc3c7; border-radius: 12px; padding: 24px 16px;
+  text-align: center; cursor: pointer; transition: all 0.2s; background: white;
+}
+.upload-box:hover, .upload-box.dragover { border-color: #9b59b6; background: #f5eef8; }
+.upload-box.team:hover, .upload-box.team.dragover { border-color: #3498db; background: #ebf5fb; }
+.upload-box.loaded { border-color: #27ae60; background: #eafaf1; }
+.upload-box .icon { font-size: 1.8em; margin-bottom: 6px; }
+.upload-box .label { font-size: 0.95em; font-weight: 600; color: #555; margin-bottom: 4px; }
+.upload-box p { font-size: 0.82em; color: #999; }
+.upload-box .file-name { font-size: 0.82em; color: #27ae60; margin-top: 6px; font-weight: 500; }
+.upload-box input { display: none; }
+
+/* Settings */
+.settings {
+  background: white; border-radius: 12px; padding: 14px 18px;
+  margin-bottom: 20px; display: none; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.setting-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.setting-row label { font-size: 0.9em; color: #555; }
+.setting-row select {
+  padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.9em;
+}
+
+/* Students pool */
+.students-pool {
+  background: white; border-radius: 12px; padding: 16px 20px;
+  display: none; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.pool-stats {
+  font-size: 0.85em; color: #7f8c8d; margin-bottom: 12px;
+}
+.student-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 8px;
+  border-bottom: 1px solid #f0f0f0; flex-wrap: wrap;
+}
+.student-row:last-child { border-bottom: none; }
+.student-name { font-weight: 600; min-width: 120px; }
+.source-tag {
+  font-size: 0.72em; padding: 2px 8px; border-radius: 10px;
+  white-space: nowrap;
+}
+.tag-personal-math { background: #d5f5e3; color: #1e8449; }
+.tag-personal-sci { background: #d6eaf8; color: #2471a3; }
+.tag-personal-both { background: #e8daef; color: #6c3483; }
+.tag-team { background: #fdebd0; color: #af601a; }
+.student-info { font-size: 0.85em; color: #888; flex: 1; }
+.student-rate { font-size: 0.85em; color: #555; }
+.student-rate-inputs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.student-rate-inputs label { font-size: 0.78em; color: #888; }
+.student-rate-inputs input {
+  width: 78px; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px;
+  font-size: 0.85em; text-align: right;
+}
+.student-rate-inputs input:focus { outline: none; border-color: #9b59b6; }
+.student-fee { font-size: 0.85em; color: #1e8449; font-weight: 600; }
+.student-fee-pending { font-size: 0.82em; color: #aaa; font-style: italic; }
+.student-entries-toggle {
+  font-size: 0.78em; color: #9b59b6; cursor: pointer; text-decoration: underline;
+}
+.student-entries {
+  width: 100%; padding: 8px 12px; background: #fafafa; border-radius: 6px;
+  margin-top: 4px; font-size: 0.82em; line-height: 1.6; color: #555;
+  display: none;
+}
+.student-entries.open { display: block; }
+
+/* Parents section */
+.parents-section {
+  background: white; border-radius: 12px; padding: 16px 20px;
+  margin-bottom: 20px; display: none; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.parents-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.parents-header h2 {
+  font-size: 1.05em; color: #2c3e50; margin: 0;
+  border-left: 4px solid #8e44ad; padding-left: 10px;
+}
+.parents-actions { display: flex; gap: 8px; }
+.btn-add-parent {
+  padding: 6px 12px; background: #8e44ad; color: white; border: none;
+  border-radius: 6px; font-size: 0.85em; cursor: pointer;
+}
+.btn-add-parent:hover { background: #7d3c98; }
+.parents-hint { font-size: 0.82em; color: #999; margin-bottom: 12px; }
+.parent-lanes { display: flex; flex-direction: column; gap: 10px; }
+.parent-lane {
+  border: 2px dashed #d5dbdb; border-radius: 10px; padding: 10px 14px;
+  background: #fafafa; transition: all 0.15s; min-height: 56px;
+}
+.parent-lane.dragover { border-color: #8e44ad; background: #f5eef8; }
+.parent-lane-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;
+}
+.parent-name {
+  font-weight: 600; font-size: 0.95em; color: #2c3e50;
+  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+}
+.parent-name:hover { background: #f0f0f0; }
+.parent-meta { font-size: 0.78em; color: #888; flex: 1; }
+.parent-actions { display: flex; gap: 6px; }
+.btn-mini {
+  font-size: 0.75em; padding: 3px 8px; border: 1px solid #ddd;
+  background: white; border-radius: 4px; cursor: pointer; color: #555;
+}
+.btn-mini:hover { background: #f5f5f5; }
+.btn-mini.danger { color: #c0392b; border-color: #f5b7b1; }
+.btn-mini.danger:hover { background: #fdebd0; }
+.parent-students {
+  display: flex; flex-wrap: wrap; gap: 6px; min-height: 32px;
+}
+.parent-students .empty-hint {
+  color: #bbb; font-size: 0.82em; padding: 6px 4px; font-style: italic;
+}
+
+/* Student chip (compact form for use inside parent lanes & unassigned pool) */
+.student-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 14px; background: white;
+  border: 1px solid #d5dbdb; font-size: 0.85em;
+  cursor: grab; user-select: none; white-space: nowrap;
+}
+.student-chip:active { cursor: grabbing; }
+.student-chip.dragging { opacity: 0.4; }
+.student-chip .chip-name { font-weight: 500; }
+.student-chip .chip-meta { font-size: 0.78em; color: #888; }
+.student-chip .chip-tag {
+  font-size: 0.7em; padding: 1px 6px; border-radius: 8px;
+}
+.btn-split {
+  border: none; background: transparent; color: #8e44ad; cursor: pointer;
+  font-size: 0.75em; padding: 0 2px; line-height: 1;
+}
+.btn-split:hover { color: #6c3483; text-decoration: underline; }
+
+/* Unassigned student row (the pool) is now drag-source */
+.student-row {
+  cursor: grab;
+}
+.student-row:active { cursor: grabbing; }
+.student-row.dragging { opacity: 0.4; }
+.students-pool.dragover { background: #fdf8e3; }
+
+/* Pool two-column layout (Personal | Team) */
+.pool-columns {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+  margin-top: 8px;
+}
+.pool-column {
+  background: #fafafa; border-radius: 8px; padding: 10px;
+  min-height: 100px; border: 1px dashed transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+.pool-column.dragover { border-color: #f39c12; background: #fef9e7; }
+.pool-column-header {
+  font-size: 0.85em; font-weight: 600; color: #555;
+  margin-bottom: 8px; padding-bottom: 6px;
+  border-bottom: 1px solid #eee;
+}
+.pool-column-list { min-height: 60px; }
+.pool-column-list .student-row {
+  padding: 8px 6px; gap: 6px;
+}
+.pool-column-list .student-row .student-name { min-width: 0; }
+.pool-column-list .student-row .student-info { flex: 0 1 auto; }
+.btn-row-generate {
+  font-size: 0.78em; padding: 4px 10px; border: none;
+  background: #27ae60; color: white; border-radius: 4px; cursor: pointer;
+}
+.btn-row-generate:hover { background: #1e8449; }
+.quick-assign {
+  padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px;
+  font-size: 0.78em; background: white; cursor: pointer;
+  max-width: 110px;
+}
+.quick-assign:hover { border-color: #8e44ad; }
+@media (max-width: 700px) {
+  .pool-columns { grid-template-columns: 1fr; }
+}
+
+/* Generate buttons inside parent lanes */
+.btn-generate {
+  font-size: 0.78em; padding: 4px 10px; border: none;
+  background: #27ae60; color: white; border-radius: 4px; cursor: pointer;
+}
+.btn-generate:hover { background: #1e8449; }
+.btn-generate-all {
+  padding: 6px 14px; background: #27ae60; color: white; border: none;
+  border-radius: 6px; font-size: 0.85em; cursor: pointer; margin-right: 8px;
+}
+.btn-generate-all:hover { background: #1e8449; }
+
+/* Results section (generated messages) */
+.results-section {
+  background: white; border-radius: 12px; padding: 16px 20px;
+  margin-top: 20px; display: none; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.results-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 12px; flex-wrap: wrap; gap: 8px;
+}
+.results-header h2 {
+  font-size: 1.05em; color: #2c3e50; margin: 0;
+  border-left: 4px solid #16a085; padding-left: 10px;
+}
+.results-actions { display: flex; gap: 8px; }
+.btn-results {
+  padding: 5px 12px; border: 1px solid #ddd; background: white;
+  border-radius: 6px; font-size: 0.82em; cursor: pointer; color: #555;
+}
+.btn-results:hover { background: #f5f5f5; }
+.btn-results.primary {
+  background: #16a085; color: white; border-color: #16a085;
+}
+.btn-results.primary:hover { background: #117a65; }
+.results-count { font-size: 0.85em; color: #7f8c8d; margin-bottom: 10px; }
+.msg-card {
+  border: 1px solid #e8e8e8; border-radius: 10px; margin-bottom: 10px;
+  overflow: hidden; transition: all 0.2s;
+}
+.msg-card.billed { opacity: 0.55; background: #fafafa; }
+.msg-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; background: #f8f9fa; cursor: pointer;
+  flex-wrap: wrap; gap: 8px;
+}
+.msg-header:hover { background: #f0f1f3; }
+.msg-header .name { font-weight: 600; color: #2c3e50; font-size: 0.95em; }
+.msg-header .summary { font-size: 0.85em; color: #555; }
+.msg-body {
+  padding: 12px 14px; background: white; display: none;
+  border-top: 1px solid #f0f0f0;
+}
+.msg-body.open { display: block; }
+.msg-text {
+  white-space: pre-wrap; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+  font-size: 0.88em; line-height: 1.55; color: #2c3e50;
+  background: #fafafa; padding: 12px; border-radius: 6px;
+}
+.msg-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.msg-actions button {
+  padding: 6px 14px; border: 1px solid #ddd; background: white;
+  border-radius: 6px; font-size: 0.85em; cursor: pointer; color: #555;
+}
+.msg-actions .btn-copy {
+  background: #3498db; color: white; border-color: #3498db;
+}
+.msg-actions .btn-copy:hover { background: #2874a6; }
+.msg-actions .btn-copy.copied { background: #27ae60; border-color: #27ae60; }
+.msg-actions .btn-delete:hover { background: #fdebd0; color: #c0392b; }
+
+/* Toast */
+.toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: #2c3e50; color: white; padding: 10px 24px; border-radius: 8px;
+  font-size: 0.9em; opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 999;
+}
+.toast.show { opacity: 1; }
+
+@media (max-width: 600px) {
+  .container { padding: 12px; }
+  h1 { font-size: 1.3em; }
+  .upload-row { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>家教請款訊息產生器（合併版）</h1>
+  <p class="subtitle">Personal + Team 整合 / 第一階段開發中</p>
+
+  <div class="round-banner">
+    🚧 R4:上傳 → 學生池(分 Personal/Team)→ <strong>家長分組可選</strong> → 一對多 → 訊息產出 + 跨裝置同步。後續會補:已請款、可請款日、教材費。
+  </div>
+
+  <section>
+    <h2>📅 Personal：Apple Calendar 匯出 (.ics)</h2>
+    <div class="upload-row">
+      <div class="upload-box" id="uploadMath" onclick="document.getElementById('fileMath').click()">
+        <div class="icon">📐</div>
+        <div class="label">Math 行事曆（老婆）</div>
+        <p>點擊或拖曳 .ics 檔案</p>
+        <div class="file-name" id="fileNameMath"></div>
+        <input type="file" id="fileMath" accept=".ics">
+      </div>
+      <div class="upload-box" id="uploadScience" onclick="document.getElementById('fileScience').click()">
+        <div class="icon">🔬</div>
+        <div class="label">Science 行事曆（我）</div>
+        <p>點擊或拖曳 .ics 檔案</p>
+        <div class="file-name" id="fileNameScience"></div>
+        <input type="file" id="fileScience" accept=".ics">
+      </div>
+    </div>
+  </section>
+
+  <section class="team">
+    <h2>📊 Team：班表 Excel</h2>
+    <div class="upload-row">
+      <div class="upload-box team" id="uploadExcel" onclick="document.getElementById('fileExcel').click()">
+        <div class="icon">📂</div>
+        <div class="label">班表 Excel</div>
+        <p>點擊或拖曳 .xlsx / .xls 檔案</p>
+        <div class="file-name" id="fileNameExcel"></div>
+        <input type="file" id="fileExcel" accept=".xlsx,.xls">
+      </div>
+    </div>
+  </section>
+
+  <div class="settings" id="settings">
+    <div class="setting-row">
+      <label>月份：</label>
+      <select id="monthSelect"></select>
+      <span style="color:#999;font-size:0.82em;">（從上傳資料自動偵測）</span>
+      <span style="margin-left:16px;"></span>
+      <label>招呼語：</label>
+      <select id="greetingSelect">
+        <option value="您好">您好</option>
+        <option value="早安">早安</option>
+        <option value="午安">午安</option>
+        <option value="晚安">晚安</option>
+      </select>
+    </div>
+  </div>
+
+  <section class="parents-section" id="parentsSection">
+    <div class="parents-header">
+      <h2>👨‍👩‍👧 家長分組</h2>
+      <div class="parents-actions">
+        <button class="btn-generate-all" onclick="generateAllMessages()">📝 全部產出</button>
+        <button class="btn-add-parent" onclick="addParent()">＋ 新增分組</button>
+      </div>
+    </div>
+    <p class="parents-hint">兄弟姊妹同家長要合併請款訊息時,把學生拖進同一個分組(沒分組的學生在下方學生池可以單獨產出訊息)。同學生分到多位家長(一對多家教)時,在學生池上的「一對多」鈕複製分身、改名後拖到不同分組。設定跨月持久 + 跨裝置同步。</p>
+    <div class="parent-lanes" id="parentLanes"></div>
+  </section>
+
+  <section class="results-section" id="resultsSection">
+    <div class="results-header">
+      <h2>📨 請款訊息</h2>
+    </div>
+    <div class="results-count" id="resultsCount"></div>
+    <div id="msgList"></div>
+  </section>
+
+  <section class="students-pool" id="studentsPool">
+    <h2>👥 學生池(未分配)</h2>
+    <div class="pool-stats" id="poolStats"></div>
+    <div class="pool-columns">
+      <div class="pool-column" id="poolColumnPersonal"
+           ondragover="onPoolColumnDragOver(event)"
+           ondragleave="onPoolColumnDragLeave(event)"
+           ondrop="onPoolDrop(event)">
+        <div class="pool-column-header">📅 Personal(個人家教)</div>
+        <div class="pool-column-list" id="studentsListPersonal"></div>
+      </div>
+      <div class="pool-column" id="poolColumnTeam"
+           ondragover="onPoolColumnDragOver(event)"
+           ondragleave="onPoolColumnDragLeave(event)"
+           ondrop="onPoolDrop(event)">
+        <div class="pool-column-header">📊 Team(團隊老師)</div>
+        <div class="pool-column-list" id="studentsListTeam"></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ===== Storage keys (new prefix 'tb_' to avoid clashing with existing two apps) =====
+const TB_PERSONAL_RAW = 'tb_personal_raw_v1';
+const TB_TEAM_RAW = 'tb_team_raw_v1';
+const TB_PERSONAL_RATES = 'tb_personal_rates_v1';
+const TB_PARENTS = 'tb_parents_v1';
+const TB_ASSIGNMENTS = 'tb_assignments_v1';
+const TB_SPLITS = 'tb_splits_v1';
+const TB_RENAMES = 'tb_renames_v1';
+
+// ===== Firebase setup (cross-device sync) =====
+// Same Realtime DB as personal/team versions (project: tutor-billing-sync),
+// but isolated under a new room 'MERGED_SYNC' so we don't pollute legacy data.
+const firebaseConfig = {
+  apiKey: "AIzaSyBtsdmf5m2SGvduknWGehCkzIPMZ8lmkAU",
+  authDomain: "tutor-billing-sync.firebaseapp.com",
+  databaseURL: "https://tutor-billing-sync-default-rtdb.firebaseio.com",
+  projectId: "tutor-billing-sync",
+  storageBucket: "tutor-billing-sync.firebasestorage.app",
+  messagingSenderId: "691904357232",
+  appId: "1:691904357232:web:453a34a1973f22f344a5b5"
+};
+firebase.initializeApp(firebaseConfig);
+const fbDb = firebase.database();
+const FIXED_ROOM = 'MERGED_SYNC';
+const SYNC_KEYS = [TB_PERSONAL_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_TEAM_RAW];
+let _skipSync = false;
+
+function pushToFirebase(key, data) {
+  if (_skipSync) return;
+  fbDb.ref(`rooms/${FIXED_ROOM}/${key}`).set(data).catch(err => {
+    console.error('Firebase write failed for ' + key + ':', err);
+  });
+}
+
+function applySyncedValue(key, value) {
+  // Apply Firebase value to localStorage and re-load in-memory state
+  _skipSync = true;
+  try {
+    if (value === null || value === undefined) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
+  } catch {}
+  if (key === TB_PARENTS) loadParents();
+  else if (key === TB_ASSIGNMENTS) loadAssignments();
+  else if (key === TB_SPLITS) loadSplits();
+  else if (key === TB_RENAMES) loadRenames();
+  else if (key === TB_TEAM_RAW) restoreTeamRaw();
+  // TB_PERSONAL_RATES is read on demand via loadPersonalRates(), no in-memory cache
+  _skipSync = false;
+}
+
+function setupFirebaseSync() {
+  const ref = fbDb.ref(`rooms/${FIXED_ROOM}`);
+  // Initial pull: overwrite local state with cloud snapshot (prevents empty-localStorage from clobbering cloud)
+  ref.once('value').then(snap => {
+    const data = snap.val() || {};
+    SYNC_KEYS.forEach(k => {
+      if (data[k] !== undefined && data[k] !== null) applySyncedValue(k, data[k]);
+    });
+    onDataUpdated();
+  }).catch(err => console.error('Firebase initial pull failed:', err));
+
+  // Listen for live changes from other devices
+  ref.on('child_changed', snap => {
+    if (!SYNC_KEYS.includes(snap.key)) return;
+    applySyncedValue(snap.key, snap.val());
+    renderAll();
+  });
+  ref.on('child_added', snap => {
+    if (!SYNC_KEYS.includes(snap.key)) return;
+    applySyncedValue(snap.key, snap.val());
+    renderAll();
+  });
+}
+
+// ===== Parents / Assignments / Splits / Renames =====
+let parents = [];      // [{id, name}]
+let assignments = {};  // { studentKey: parentId }
+let splits = [];       // [{key, sourceKey, displayName}]
+let renames = [];      // [{sourceKey, displayName}] — user override of source student names
+
+function loadRenames() {
+  try { renames = JSON.parse(localStorage.getItem(TB_RENAMES)) || []; }
+  catch { renames = []; }
+}
+function saveRenames() {
+  try { localStorage.setItem(TB_RENAMES, JSON.stringify(renames)); } catch {}
+  pushToFirebase(TB_RENAMES, renames);
+}
+function getRename(sourceKey) {
+  const r = renames.find(x => x.sourceKey === sourceKey);
+  return r ? r.displayName : null;
+}
+function setRename(sourceKey, displayName) {
+  const i = renames.findIndex(x => x.sourceKey === sourceKey);
+  if (!displayName || !displayName.trim()) {
+    if (i >= 0) renames.splice(i, 1);
+  } else {
+    if (i >= 0) renames[i].displayName = displayName.trim();
+    else renames.push({ sourceKey, displayName: displayName.trim() });
+  }
+  saveRenames();
+}
+function hasBeenSplit(sourceKey) {
+  return splits.some(s => s.sourceKey === sourceKey);
+}
+
+function renameSource(sourceKey, originalName) {
+  const current = getRename(sourceKey) || originalName;
+  const v = prompt('修改學生顯示名稱(留空恢復原名):', current);
+  if (v === null) return;
+  setRename(sourceKey, v);
+  renderAll();
+  showToast(v.trim() ? '已改名:' + v.trim() : '已恢復原名:' + originalName);
+}
+
+function loadParents() {
+  try { parents = JSON.parse(localStorage.getItem(TB_PARENTS)) || []; }
+  catch { parents = []; }
+}
+function saveParents() {
+  try { localStorage.setItem(TB_PARENTS, JSON.stringify(parents)); } catch {}
+  pushToFirebase(TB_PARENTS, parents);
+}
+function loadAssignments() {
+  try { assignments = JSON.parse(localStorage.getItem(TB_ASSIGNMENTS)) || {}; }
+  catch { assignments = {}; }
+}
+function saveAssignments() {
+  try { localStorage.setItem(TB_ASSIGNMENTS, JSON.stringify(assignments)); } catch {}
+  pushToFirebase(TB_ASSIGNMENTS, assignments);
+}
+function loadSplits() {
+  try { splits = JSON.parse(localStorage.getItem(TB_SPLITS)) || []; }
+  catch { splits = []; }
+}
+function saveSplits() {
+  try { localStorage.setItem(TB_SPLITS, JSON.stringify(splits)); } catch {}
+  pushToFirebase(TB_SPLITS, splits);
+}
+
+function newId(prefix) {
+  return prefix + '_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+}
+
+function addParent() {
+  // Auto-name: find next available "家長 N" not already used (so deletes don't reuse)
+  const used = new Set(parents.map(p => p.name));
+  let n = parents.length + 1;
+  while (used.has('家長 ' + n)) n++;
+  const name = '家長 ' + n;
+  parents.push({ id: newId('parent'), name });
+  saveParents();
+  renderAll();
+  showToast('已新增分組:' + name);
+}
+
+function renameParent(id) {
+  const p = parents.find(x => x.id === id);
+  if (!p) return;
+  const v = prompt('家長稱謂', p.name);
+  if (v === null) return;
+  const trimmed = v.trim();
+  if (!trimmed) return;
+  p.name = trimmed;
+  saveParents();
+  renderAll();
+}
+
+function deleteParent(id) {
+  const p = parents.find(x => x.id === id);
+  if (!p) return;
+  // Count assigned students
+  const assignedCount = Object.values(assignments).filter(pid => pid === id).length;
+  const confirmMsg = assignedCount > 0
+    ? `確定刪除「${p.name}」?其下 ${assignedCount} 位學生會回到未分配池`
+    : `確定刪除「${p.name}」?`;
+  if (!confirm(confirmMsg)) return;
+  parents = parents.filter(x => x.id !== id);
+  // Clean dangling assignments
+  Object.keys(assignments).forEach(k => { if (assignments[k] === id) delete assignments[k]; });
+  saveParents();
+  saveAssignments();
+  renderAll();
+  showToast('已刪除「' + p.name + '」');
+}
+
+function splitStudent(sourceKey) {
+  // 一對多:每按一次新增一個分身,名字 {源名}(N),N 從 2 起算。
+  // 原學生繼續顯示在學生池(同學生 + 分身可分到不同家長分組)。
+  const src = findSourceForKey(sourceKey);
+  if (!src) { showToast('找不到原學生資料'); return; }
+  const existing = splits.filter(s => s.sourceKey === sourceKey).length;
+  const nextN = existing + 2;
+  const baseName = String(src.displayName).replace(/\(\d+\)\s*$/, '').trim();
+  const newName = `${baseName}(${nextN})`;
+  splits.push({ key: newId('split'), sourceKey, displayName: newName });
+  saveSplits();
+  renderAll();
+  showToast(`已新增分身:${newName}(可按「改名」修正)`);
+}
+
+function deleteSplit(key) {
+  const sp = splits.find(s => s.key === key);
+  if (!sp) return;
+  if (!confirm(`刪除分身「${sp.displayName}」?(原學生會重新顯示)`)) return;
+  splits = splits.filter(s => s.key !== key);
+  delete assignments[key];
+  saveSplits();
+  saveAssignments();
+  renderAll();
+}
+
+function renameSplit(key) {
+  const sp = splits.find(s => s.key === key);
+  if (!sp) return;
+  const v = prompt('分身顯示名稱', sp.displayName);
+  if (v === null) return;
+  const trimmed = v.trim();
+  if (!trimmed) return;
+  sp.displayName = trimmed;
+  saveSplits();
+  renderAll();
+}
+
+// ===== Personal rate persistence =====
+function loadPersonalRates() {
+  try { return JSON.parse(localStorage.getItem(TB_PERSONAL_RATES)) || {}; }
+  catch { return {}; }
+}
+function savePersonalRates(rates) {
+  try { localStorage.setItem(TB_PERSONAL_RATES, JSON.stringify(rates)); } catch {}
+  pushToFirebase(TB_PERSONAL_RATES, rates);
+}
+function getPersonalRate(canonical, subject) {
+  const rates = loadPersonalRates();
+  const v = rates[canonical + '_' + subject];
+  return v ? Number(v) : null;
+}
+function setPersonalRate(canonical, subject, value) {
+  const rates = loadPersonalRates();
+  const key = canonical + '_' + subject;
+  if (value === '' || value === null || value === undefined || isNaN(Number(value))) {
+    delete rates[key];
+  } else {
+    rates[key] = String(value);
+  }
+  savePersonalRates(rates);
+}
+function onPersonalRateChange(input) {
+  const canonical = input.dataset.canonical;
+  const subject = input.dataset.subject;
+  setPersonalRate(canonical, subject, input.value);
+  renderAll();
+}
+
+// ===== State =====
+let mathEvents = [];      // [{name, date, hours, year, month, day}]
+let scienceEvents = [];   // same shape
+let teamStudents = [];    // [{name, subject, rate, entries:[{date,hours,dateObj}], totalHours, totalFee, count, month, year}]
+
+// Personal: merged students (after fuzzy name match within current month)
+let personalStudents = [];  // [{canonical, mathNames:Set, sciNames:Set, isBoth, isMath, isSci, mEv, sEv}]
+
+// ===== Utilities =====
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+function escapeHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function formatNum(n) { return Number.isInteger(n) ? String(n) : String(parseFloat(n.toFixed(2))); }
+
+// ===== ICS Parsing (lifted from personal-tutor-billing) =====
+function parseICS(text) {
+  const events = [];
+  const blocks = text.split('BEGIN:VEVENT');
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i].split('END:VEVENT')[0];
+    const summary = extractField(block, 'SUMMARY');
+    const dtstart = extractDateTime(block, 'DTSTART');
+    const dtend = extractDateTime(block, 'DTEND');
+    if (summary && dtstart && dtend) {
+      const hours = (dtend - dtstart) / (1000 * 60 * 60);
+      if (hours > 0 && hours < 24) {
+        events.push({
+          name: summary.trim(), date: dtstart,
+          hours: Math.round(hours * 100) / 100,
+          year: dtstart.getFullYear(), month: dtstart.getMonth() + 1, day: dtstart.getDate()
+        });
+      }
+    }
+  }
+  events.sort((a, b) => a.date - b.date);
+  return events;
+}
+function extractField(block, field) {
+  const unfolded = block.replace(/\r?\n[ \t]/g, '');
+  const regex = new RegExp('^' + field + '[^:]*:(.*)$', 'm');
+  const m = unfolded.match(regex);
+  return m ? m[1].trim() : null;
+}
+function extractDateTime(block, field) {
+  const unfolded = block.replace(/\r?\n[ \t]/g, '');
+  const regex = new RegExp('^' + field + '[^:]*:(.*?)\\s*$', 'm');
+  const m = unfolded.match(regex);
+  if (!m) return null;
+  const val = m[1].trim();
+  const p = val.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
+  if (!p) return null;
+  if (val.endsWith('Z')) return new Date(Date.UTC(+p[1], +p[2]-1, +p[3], +p[4], +p[5], +p[6]));
+  return new Date(+p[1], +p[2]-1, +p[3], +p[4], +p[5], +p[6]);
+}
+
+// ===== Fuzzy name match (lifted from personal-tutor-billing) =====
+function cleanParens(name) {
+  return name.replace(/\(.*?\)/g, '').replace(/（.*?）/g, '')
+    .replace(/[(\（].*$/g, '').trim();
+}
+function normalizeName(name) {
+  return cleanParens(name)
+    .replace(/[&＆+＋]/g, ' ').replace(/[,，、]/g, ' ')
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+}
+function namesMatch(a, b) {
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  return na === nb;
+}
+
+// Group personal students by fuzzy name within a single month
+function buildPersonalStudentsForMonth(year, month) {
+  const mEv = mathEvents.filter(e => e.year === year && e.month === month);
+  const sEv = scienceEvents.filter(e => e.year === year && e.month === month);
+
+  const mathNames = [...new Set(mEv.map(e => e.name))];
+  const sciNames = [...new Set(sEv.map(e => e.name))];
+
+  const groups = [];
+  function findGroup(name) {
+    for (const g of groups) {
+      for (const n of [...g.mathNames, ...g.sciNames]) {
+        if (namesMatch(n, name)) return g;
+      }
+    }
+    return null;
+  }
+  mathNames.forEach(name => {
+    const g = findGroup(name);
+    if (g) g.mathNames.add(name);
+    else groups.push({ mathNames: new Set([name]), sciNames: new Set() });
+  });
+  sciNames.forEach(name => {
+    const g = findGroup(name);
+    if (g) g.sciNames.add(name);
+    else groups.push({ mathNames: new Set(), sciNames: new Set([name]) });
+  });
+
+  return groups.map(g => {
+    const allNames = [...g.mathNames, ...g.sciNames];
+    const canonical = allNames.sort((a, b) => a.length - b.length)[0];
+    const mList = mEv.filter(e => g.mathNames.has(e.name)).sort((a,b)=>a.date-b.date);
+    const sList = sEv.filter(e => g.sciNames.has(e.name)).sort((a,b)=>a.date-b.date);
+    return {
+      canonical,
+      isMath: g.mathNames.size > 0,
+      isSci: g.sciNames.size > 0,
+      isBoth: g.mathNames.size > 0 && g.sciNames.size > 0,
+      mEv: mList, sEv: sList,
+      year, month
+    };
+  }).sort((a,b)=>a.canonical.localeCompare(b.canonical));
+}
+
+// ===== Excel Parsing (lifted from team-tutor-billing) =====
+function parseExcelFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+        resolve(parseTeamStudents(data));
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = () => reject(new Error('檔案讀取失敗'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+function parseTeamStudents(data) {
+  let dateHeaderRow = -1;
+  for (let r = 0; r < Math.min(data.length, 15); r++) {
+    if (data[r] && data[r][0] && String(data[r][0]).trim() === '日期') { dateHeaderRow = r; break; }
+  }
+  if (dateHeaderRow === -1) throw new Error('找不到「日期」表頭，請確認 Excel 格式');
+
+  const dateStartRow = dateHeaderRow + 1;
+  let rateRow = -1;
+  for (let r = 0; r < dateHeaderRow; r++) {
+    const cell = data[r] && data[r][0] ? String(data[r][0]).trim() : '';
+    if (cell.includes('家長實付') || cell.includes('實付時薪')) { rateRow = r; break; }
+  }
+  if (rateRow === -1) rateRow = 5;
+
+  const studentRow = 1;
+  const subjectRow = 3;
+
+  // Detect month/year from first valid date
+  let month = 0, year = 0;
+  for (let r = dateStartRow; r < data.length; r++) {
+    const cell = data[r] ? data[r][0] : null;
+    if (cell) {
+      const d = parseExcelDate(cell);
+      if (d) { month = d.getMonth() + 1; year = d.getFullYear(); break; }
+    }
+  }
+
+  let dateEndRow = dateStartRow;
+  for (let r = dateStartRow; r < data.length; r++) {
+    const cell = data[r] ? data[r][0] : null;
+    if (!cell) break;
+    if (!parseExcelDate(cell)) break;
+    dateEndRow = r + 1;
+  }
+
+  const students = [];
+  const totalCols = data[studentRow] ? data[studentRow].length : 0;
+  for (let col = 3; col < totalCols; col++) {
+    const studentName = data[studentRow] ? data[studentRow][col] : null;
+    const rate = data[rateRow] ? data[rateRow][col] : null;
+    if (!studentName || !rate || isNaN(Number(rate))) continue;
+    const cleanName = String(studentName).replace(/\n/g, '、');
+    const subject = data[subjectRow] ? String(data[subjectRow][col] || '').trim() : '';
+    const numRate = Number(rate);
+    const entries = [];
+    for (let r = dateStartRow; r < dateEndRow; r++) {
+      const val = data[r] ? data[r][col] : null;
+      const dateCell = data[r] ? data[r][0] : null;
+      if (val === null || val === undefined || val === '') continue;
+      const numVal = Number(val);
+      if (isNaN(numVal)) continue;
+      const d = parseExcelDate(dateCell);
+      if (!d) continue;
+      entries.push({
+        date: (d.getMonth() + 1) + '/' + d.getDate(),
+        hours: numVal,
+        dateObj: d,
+        year: d.getFullYear(),
+        month: d.getMonth() + 1,
+        day: d.getDate()
+      });
+    }
+    if (entries.length === 0) continue;
+    const totalHours = entries.reduce((s, e) => s + e.hours, 0);
+    const totalFee = totalHours * numRate;
+    students.push({
+      name: cleanName, subject, rate: numRate,
+      entries: entries.sort((a, b) => a.dateObj - b.dateObj),
+      totalHours, totalFee: Math.round(totalFee), count: entries.length,
+      month, year
+    });
+  }
+
+  // Duplicate name detection: append subject suffix
+  const nameCount = {};
+  students.forEach(s => { nameCount[s.name] = (nameCount[s.name] || 0) + 1; });
+  students.forEach(s => {
+    if (nameCount[s.name] > 1 && s.subject) {
+      s.name = s.name + '（' + s.subject + '）';
+    }
+  });
+
+  return students;
+}
+
+function parseExcelDate(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  if (typeof val === 'number') {
+    const d = new Date((val - 25569) * 86400000);
+    if (!isNaN(d.getTime())) return d;
+  }
+  const s = String(val).trim();
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d;
+  return null;
+}
+
+// ===== File handlers =====
+['Math', 'Science'].forEach(type => {
+  const box = document.getElementById('upload' + type);
+  const input = document.getElementById('file' + type);
+  box.addEventListener('dragover', e => { e.preventDefault(); box.classList.add('dragover'); });
+  box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+  box.addEventListener('drop', e => {
+    e.preventDefault(); box.classList.remove('dragover');
+    if (e.dataTransfer.files.length) loadICS(e.dataTransfer.files[0], type);
+  });
+  input.addEventListener('change', e => { if (e.target.files.length) loadICS(e.target.files[0], type); });
+});
+
+(function setupExcelUpload() {
+  const box = document.getElementById('uploadExcel');
+  const input = document.getElementById('fileExcel');
+  box.addEventListener('dragover', e => { e.preventDefault(); box.classList.add('dragover'); });
+  box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+  box.addEventListener('drop', e => {
+    e.preventDefault(); box.classList.remove('dragover');
+    if (e.dataTransfer.files.length) loadExcel(e.dataTransfer.files[0]);
+  });
+  input.addEventListener('change', e => { if (e.target.files.length) loadExcel(e.target.files[0]); });
+})();
+
+function loadICS(file, type) {
+  if (!file.name.match(/\.ics$/i)) { showToast('請上傳 .ics 檔案'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const events = parseICS(e.target.result);
+      if (events.length === 0) { showToast('找不到任何行事曆事件'); return; }
+      if (type === 'Math') mathEvents = events;
+      else scienceEvents = events;
+      document.getElementById('upload' + type).classList.add('loaded');
+      document.getElementById('fileName' + type).textContent = file.name + ' (' + events.length + ' 筆)';
+      cachePersonalRaw();
+      onDataUpdated();
+      showToast(`${type} 已載入 ${events.length} 筆事件`);
+    } catch (err) { showToast('檔案解析失敗：' + err.message); }
+  };
+  reader.readAsText(file);
+}
+
+async function loadExcel(file) {
+  if (!file.name.match(/\.xlsx?$/i)) { showToast('請上傳 .xlsx 或 .xls 檔'); return; }
+  try {
+    const students = await parseExcelFile(file);
+    if (students.length === 0) { showToast('Excel 中沒找到學生資料'); return; }
+    teamStudents = students;
+    document.getElementById('uploadExcel').classList.add('loaded');
+    document.getElementById('fileNameExcel').textContent = file.name + ' (' + students.length + ' 位學生)';
+    cacheTeamRaw();
+    onDataUpdated();
+    showToast(`Team Excel 已載入 ${students.length} 位學生`);
+  } catch (err) { showToast('Excel 解析失敗：' + err.message); }
+}
+
+// ===== Cache to localStorage (so reload doesn't lose data) =====
+function cachePersonalRaw() {
+  try {
+    // Date objects don't survive JSON round-trip; store ISO strings
+    const dump = (arr) => arr.map(e => ({ ...e, date: e.date.toISOString() }));
+    localStorage.setItem(TB_PERSONAL_RAW, JSON.stringify({
+      mathEvents: dump(mathEvents),
+      scienceEvents: dump(scienceEvents)
+    }));
+  } catch {}
+}
+function restorePersonalRaw() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TB_PERSONAL_RAW));
+    if (!raw) return false;
+    const restore = (arr) => arr.map(e => ({ ...e, date: new Date(e.date) }));
+    mathEvents = restore(raw.mathEvents || []);
+    scienceEvents = restore(raw.scienceEvents || []);
+    if (mathEvents.length > 0) {
+      document.getElementById('uploadMath').classList.add('loaded');
+      document.getElementById('fileNameMath').textContent = '(已快取 ' + mathEvents.length + ' 筆)';
+    }
+    if (scienceEvents.length > 0) {
+      document.getElementById('uploadScience').classList.add('loaded');
+      document.getElementById('fileNameScience').textContent = '(已快取 ' + scienceEvents.length + ' 筆)';
+    }
+    return mathEvents.length > 0 || scienceEvents.length > 0;
+  } catch { return false; }
+}
+function cacheTeamRaw() {
+  try {
+    const dump = teamStudents.map(s => ({
+      ...s,
+      entries: s.entries.map(e => ({ ...e, dateObj: e.dateObj.toISOString() }))
+    }));
+    localStorage.setItem(TB_TEAM_RAW, JSON.stringify(dump));
+    pushToFirebase(TB_TEAM_RAW, dump);
+  } catch {}
+}
+function restoreTeamRaw() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TB_TEAM_RAW));
+    if (!raw || !Array.isArray(raw)) return false;
+    teamStudents = raw.map(s => ({
+      ...s,
+      entries: (s.entries || []).map(e => ({ ...e, dateObj: new Date(e.dateObj) }))
+    }));
+    if (teamStudents.length > 0) {
+      document.getElementById('uploadExcel').classList.add('loaded');
+      document.getElementById('fileNameExcel').textContent = '(已快取 ' + teamStudents.length + ' 位學生)';
+    }
+    return teamStudents.length > 0;
+  } catch { return false; }
+}
+
+// ===== Month detection & selector =====
+function detectAvailableMonths() {
+  const set = new Set();
+  [...mathEvents, ...scienceEvents].forEach(e => set.add(`${e.year}-${e.month}`));
+  teamStudents.forEach(s => { if (s.year && s.month) set.add(`${s.year}-${s.month}`); });
+  const arr = [...set].sort().reverse();
+  return arr;
+}
+function setupMonthSelector() {
+  const months = detectAvailableMonths();
+  if (months.length === 0) return;
+  const sel = document.getElementById('monthSelect');
+  const prev = sel.value;
+  sel.innerHTML = months.map(m => {
+    const [y, mo] = m.split('-');
+    return `<option value="${m}">${y}年${mo}月</option>`;
+  }).join('');
+  if (prev && months.includes(prev)) sel.value = prev;
+  document.getElementById('settings').style.display = 'block';
+}
+function getSelectedYM() {
+  const v = document.getElementById('monthSelect').value;
+  if (!v) return [0, 0];
+  const [y, m] = v.split('-').map(Number);
+  return [y, m];
+}
+
+// ===== Build & render =====
+function onDataUpdated() {
+  setupMonthSelector();
+  renderAll();
+}
+document.getElementById('monthSelect').addEventListener('change', renderAll);
+
+function escapeAttr(s) { return String(s).replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+
+function personalKey(canonical) { return 'p:' + canonical; }
+function teamKey(name) { return 't:' + name; }
+
+function buildOneFromPersonal(s, keyOverride, displayNameOverride) {
+  const mathHrs = s.mEv.reduce((a, e) => a + e.hours, 0);
+  const sciHrs = s.sEv.reduce((a, e) => a + e.hours, 0);
+  const totalHrs = mathHrs + sciHrs;
+  const count = s.mEv.length + s.sEv.length;
+  const mathRate = getPersonalRate(s.canonical, 'math');
+  const sciRate = getPersonalRate(s.canonical, 'sci');
+  const mathReady = !s.isMath || (mathRate !== null && mathRate > 0);
+  const sciReady = !s.isSci || (sciRate !== null && sciRate > 0);
+  let totalFee = null;
+  if (mathReady && sciReady) {
+    totalFee = Math.round((s.isMath ? mathHrs * mathRate : 0) + (s.isSci ? sciHrs * sciRate : 0));
+  }
+  const [tagClass, tagLabel] = s.isBoth
+    ? ['tag-personal-both', 'Personal · M+S']
+    : s.isMath
+      ? ['tag-personal-math', 'Personal · Math']
+      : ['tag-personal-sci', 'Personal · Sci'];
+  const sourceKey = personalKey(s.canonical);
+  const customName = !keyOverride ? getRename(sourceKey) : null;
+  return {
+    key: keyOverride || sourceKey,
+    sourceKey,
+    originalName: s.canonical,
+    displayName: displayNameOverride || customName || s.canonical,
+    rateCanonical: s.canonical,
+    source: keyOverride ? 'split' : 'personal',
+    sourceType: 'personal',
+    tagClass, tagLabel,
+    count, totalHours: totalHrs, totalFee,
+    isMath: s.isMath, isSci: s.isSci, isBoth: s.isBoth,
+    personalEv: { mEv: s.mEv, sEv: s.sEv },
+    year: s.year, month: s.month
+  };
+}
+
+function buildOneFromTeam(s, keyOverride, displayNameOverride) {
+  const sourceKey = teamKey(s.name);
+  const customName = !keyOverride ? getRename(sourceKey) : null;
+  return {
+    key: keyOverride || sourceKey,
+    sourceKey,
+    originalName: s.name,
+    displayName: displayNameOverride || customName || s.name,
+    source: keyOverride ? 'split' : 'team',
+    sourceType: 'team',
+    tagClass: 'tag-team',
+    tagLabel: 'Team' + (s.subject ? ' · ' + s.subject : ''),
+    count: s.count, totalHours: s.totalHours, totalFee: s.totalFee,
+    rate: s.rate, subject: s.subject,
+    teamEntries: s.entries,
+    year: s.year, month: s.month
+  };
+}
+
+function buildAllStudents() {
+  const [year, month] = getSelectedYM();
+  if (!year) return [];
+
+  personalStudents = buildPersonalStudentsForMonth(year, month);
+  const teamForMonth = teamStudents.filter(s => s.year === year && s.month === month);
+
+  const out = [];
+
+  // 原學生永遠保留(即使被「一對多」過);分身額外加在後面
+  personalStudents.forEach(s => out.push(buildOneFromPersonal(s)));
+  teamForMonth.forEach(s => out.push(buildOneFromTeam(s)));
+
+  splits.forEach(sp => {
+    if (sp.sourceKey.startsWith('p:')) {
+      const canonical = sp.sourceKey.slice(2);
+      const src = personalStudents.find(s => s.canonical === canonical);
+      if (!src) return;
+      out.push(buildOneFromPersonal(src, sp.key, sp.displayName));
+    } else if (sp.sourceKey.startsWith('t:')) {
+      const name = sp.sourceKey.slice(2);
+      const src = teamForMonth.find(s => s.name === name);
+      if (!src) return;
+      out.push(buildOneFromTeam(src, sp.key, sp.displayName));
+    }
+  });
+
+  return out;
+}
+
+function findSourceForKey(key) {
+  return buildAllStudents().find(s => s.key === key);
+}
+
+function renderAll() {
+  const [year, month] = getSelectedYM();
+  if (!year) return;
+  const all = buildAllStudents();
+  renderParentsSection(all);
+  renderUnassignedPool(all, year, month);
+}
+
+function renderParentsSection(all) {
+  const section = document.getElementById('parentsSection');
+  const lanesDiv = document.getElementById('parentLanes');
+  section.style.display = 'block';
+
+  if (parents.length === 0) {
+    lanesDiv.innerHTML = '<div style="padding:14px;color:#aaa;text-align:center;font-size:0.88em;">尚未新增家長,點上方「+ 新增家長」開始</div>';
+    return;
+  }
+
+  lanesDiv.innerHTML = parents.map(p => {
+    const childrenKeys = Object.keys(assignments).filter(k => assignments[k] === p.id);
+    const children = childrenKeys.map(k => all.find(s => s.key === k)).filter(Boolean);
+
+    const chipsHtml = children.length > 0
+      ? children.map(makeStudentChip).join('')
+      : '<span class="empty-hint">拖學生到這裡 / 用學生池的「↓ 分到」分配</span>';
+
+    const danglingCount = childrenKeys.length - children.length;
+    const danglingHtml = danglingCount > 0
+      ? `<span style="color:#aaa;font-size:0.78em;">(本月無資料學生 ${danglingCount} 位已隱藏)</span>`
+      : '';
+
+    return `
+      <div class="parent-lane" id="parent-lane-${p.id}"
+           ondragover="onLaneDragOver(event, '${p.id}')"
+           ondragleave="onLaneDragLeave(event)"
+           ondrop="onLaneDrop(event, '${p.id}')">
+        <div class="parent-lane-header">
+          <span class="parent-name" onclick="renameParent('${p.id}')" title="點擊改名">${escapeHtml(p.name)}</span>
+          <span class="parent-meta">${children.length} 位學生 ${danglingHtml}</span>
+          <div class="parent-actions">
+            <button class="btn-generate" onclick="generateForParent('${p.id}')">產出訊息</button>
+            <button class="btn-mini" onclick="renameParent('${p.id}')">改名</button>
+            <button class="btn-mini danger" onclick="deleteParent('${p.id}')">刪除</button>
+          </div>
+        </div>
+        <div class="parent-students">${chipsHtml}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function makeStudentChip(s) {
+  const isSplit = s.source === 'split';
+  let tools;
+  if (isSplit) {
+    tools = `<button class="btn-split" onclick="event.stopPropagation();renameSplit('${s.key}')" title="改名">✎</button>
+       <button class="btn-split" onclick="event.stopPropagation();deleteSplit('${s.key}')" title="刪除">✕</button>`;
+  } else {
+    const renameIcon = hasBeenSplit(s.sourceKey)
+      ? `<button class="btn-split" onclick="event.stopPropagation();renameSource('${escapeAttr(s.sourceKey)}', '${escapeAttr(s.originalName)}')" title="改名">✎</button>`
+      : '';
+    tools = `${renameIcon}
+       <button class="btn-split" onclick="event.stopPropagation();splitStudent('${s.key}')" title="一對多">⊕</button>`;
+  }
+  return `
+    <span class="student-chip" draggable="true"
+          data-key="${escapeAttr(s.key)}"
+          ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
+          ondragend="onChipDragEnd(event)">
+      <span class="chip-name">${escapeHtml(s.displayName)}</span>
+      ${isSplit ? '<span class="chip-tag '+s.tagClass+'" style="font-size:0.68em;">分身</span>' : ''}
+      <span class="chip-meta">${formatNum(s.totalHours)}hr</span>
+      ${tools}
+    </span>
+  `;
+}
+
+function renderUnassignedPool(all, year, month) {
+  const poolDiv = document.getElementById('studentsPool');
+  const listP = document.getElementById('studentsListPersonal');
+  const listT = document.getElementById('studentsListTeam');
+  const stats = document.getElementById('poolStats');
+  poolDiv.style.display = 'block';
+
+  if (all.length === 0) {
+    stats.textContent = `${year}年${month}月:無資料`;
+    listP.innerHTML = '<div style="padding:14px;color:#aaa;text-align:center;font-size:0.85em;">無 Personal 資料</div>';
+    listT.innerHTML = '<div style="padding:14px;color:#aaa;text-align:center;font-size:0.85em;">無 Team 資料</div>';
+    return;
+  }
+
+  const unassigned = all.filter(s => !assignments[s.key]);
+  const sortFn = (a, b) => a.displayName.localeCompare(b.displayName, 'zh-Hant');
+  const personalOnes = unassigned.filter(s => s.sourceType === 'personal').sort(sortFn);
+  const teamOnes = unassigned.filter(s => s.sourceType === 'team').sort(sortFn);
+
+  function rowHtml(s) {
+    return `
+      <div class="student-row" draggable="true"
+           data-key="${escapeAttr(s.key)}"
+           ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
+           ondragend="onChipDragEnd(event)">
+        <span class="student-name">${escapeHtml(s.displayName)}${s.source === 'split' ? ' <span class="source-tag '+s.tagClass+'" style="font-size:0.7em;">分身</span>' : ''}</span>
+        <span class="student-info">${s.count}堂 · ${formatNum(s.totalHours)}hr</span>
+        ${renderRateColumn(s)}
+        ${renderFeeColumn(s)}
+        ${renderRowTools(s)}
+        ${renderQuickAssign(s)}
+        <button class="btn-row-generate" onclick="generateForStudent('${escapeAttr(s.key)}')" title="單獨產出此學生的請款訊息">產出</button>
+      </div>
+    `;
+  }
+
+  listP.innerHTML = personalOnes.length > 0
+    ? personalOnes.map(rowHtml).join('')
+    : '<div style="padding:14px;color:#27ae60;text-align:center;font-size:0.85em;">✓ Personal 全部已分配</div>';
+  listT.innerHTML = teamOnes.length > 0
+    ? teamOnes.map(rowHtml).join('')
+    : '<div style="padding:14px;color:#27ae60;text-align:center;font-size:0.85em;">✓ Team 全部已分配</div>';
+
+  const totalAssigned = all.length - unassigned.length;
+  stats.textContent = `${year}年${month}月:全部 ${all.length} 位 / 已分配 ${totalAssigned} 位 / 未分配 ${unassigned.length} 位(Personal ${personalOnes.length} / Team ${teamOnes.length})`;
+}
+
+function renderRateColumn(s) {
+  if (s.sourceType === 'team') {
+    return `<span class="student-rate">時薪 ${s.rate}</span>`;
+  }
+  const rateCanonical = s.rateCanonical;
+  const mathRate = getPersonalRate(rateCanonical, 'math');
+  const sciRate = getPersonalRate(rateCanonical, 'sci');
+  let html = '<div class="student-rate-inputs">';
+  if (s.isMath) {
+    html += `<label>Math</label><input type="number" min="0" placeholder="時薪"
+      value="${mathRate ?? ''}" data-canonical="${escapeAttr(rateCanonical)}" data-subject="math"
+      onchange="onPersonalRateChange(this)">`;
+  }
+  if (s.isSci) {
+    html += `<label>Sci</label><input type="number" min="0" placeholder="時薪"
+      value="${sciRate ?? ''}" data-canonical="${escapeAttr(rateCanonical)}" data-subject="sci"
+      onchange="onPersonalRateChange(this)">`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderFeeColumn(s) {
+  // 產出訊息前不顯示金額,訊息卡片裡才會帶總額
+  return '';
+}
+
+function renderRowTools(s) {
+  if (s.source === 'split') {
+    return `<span style="display:flex;gap:4px;">
+      <button class="btn-mini" onclick="renameSplit('${s.key}')">改名</button>
+      <button class="btn-mini danger" onclick="deleteSplit('${s.key}')">刪除</button>
+    </span>`;
+  }
+  // 原學生:按過一對多才顯示「改名」(否則只有一筆,改名沒實際必要,徒增雜訊)
+  const renameBtn = hasBeenSplit(s.sourceKey)
+    ? `<button class="btn-mini" onclick="renameSource('${escapeAttr(s.sourceKey)}', '${escapeAttr(s.originalName)}')">改名</button>`
+    : '';
+  return `<span style="display:flex;gap:4px;">
+    ${renameBtn}
+    <button class="btn-mini" onclick="splitStudent('${s.key}')" title="新增此學生的另一筆(分到不同家長)">一對多</button>
+  </span>`;
+}
+
+function renderQuickAssign(s) {
+  const opts = parents.map(p =>
+    `<option value="${p.id}">→ ${escapeHtml(p.name)}</option>`
+  ).join('');
+  return `<select class="quick-assign" onchange="quickAssign('${escapeAttr(s.key)}', this.value); this.value='';">
+    <option value="">↓ 分到</option>
+    ${opts}
+    <option value="__new__">+ 新分組</option>
+  </select>`;
+}
+
+function quickAssign(studentKey, value) {
+  if (!value) return;
+  if (value === '__new__') {
+    addParent();
+    const newP = parents[parents.length - 1];
+    if (newP) {
+      assignments[studentKey] = newP.id;
+      saveAssignments();
+      renderAll();
+    }
+    return;
+  }
+  assignments[studentKey] = value;
+  saveAssignments();
+  renderAll();
+}
+
+// ===== Drag & drop =====
+let _draggedKey = null;
+
+function onChipDragStart(e, key) {
+  _draggedKey = key;
+  e.target.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', key); } catch {}
+}
+function onChipDragEnd(e) {
+  e.target.classList.remove('dragging');
+  document.querySelectorAll('.parent-lane').forEach(l => l.classList.remove('dragover'));
+  document.querySelectorAll('.pool-column').forEach(c => c.classList.remove('dragover'));
+  _draggedKey = null;
+}
+function onLaneDragOver(e, parentId) {
+  e.preventDefault();
+  e.currentTarget.classList.add('dragover');
+}
+function onLaneDragLeave(e) {
+  e.currentTarget.classList.remove('dragover');
+}
+function onLaneDrop(e, parentId) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('dragover');
+  if (!_draggedKey) return;
+  assignments[_draggedKey] = parentId;
+  saveAssignments();
+  _draggedKey = null;
+  renderAll();
+}
+function onPoolColumnDragOver(e) {
+  e.preventDefault();
+  e.currentTarget.classList.add('dragover');
+}
+function onPoolColumnDragLeave(e) {
+  e.currentTarget.classList.remove('dragover');
+}
+function onPoolDrop(e) {
+  e.preventDefault();
+  document.querySelectorAll('.pool-column').forEach(c => c.classList.remove('dragover'));
+  if (!_draggedKey) return;
+  delete assignments[_draggedKey];
+  saveAssignments();
+  _draggedKey = null;
+  renderAll();
+}
+
+// ===== Message generation =====
+let _generatedMessages = {}; // { parentId: {name, msg, totalFee, totalHours, count, isFamily} }
+
+function getGreeting() {
+  return document.getElementById('greetingSelect').value || '您好';
+}
+
+function buildPersonalSection(s, isFamilyContext) {
+  // s is an entry from buildAllStudents() with sourceType='personal'
+  const mEv = s.personalEv.mEv;
+  const sEv = s.personalEv.sEv;
+  const mathRate = getPersonalRate(s.rateCanonical, 'math');
+  const sciRate = getPersonalRate(s.rateCanonical, 'sci');
+
+  let text = '';
+  let totalFee = 0;
+  let totalHrs = 0;
+  let count = 0;
+
+  if (s.isBoth) {
+    const mH = mEv.reduce((a, e) => a + e.hours, 0);
+    const sH = sEv.reduce((a, e) => a + e.hours, 0);
+    const mF = Math.round(mH * mathRate);
+    const sF = Math.round(sH * sciRate);
+    text += '[Math]\n';
+    mEv.forEach(e => { text += `${e.month}/${e.day}：${formatNum(e.hours)}hr\n`; });
+    text += `小計：${formatNum(mH)}hr x ${mathRate} = ${mF}元\n`;
+    text += '\n[Science]\n';
+    sEv.forEach(e => { text += `${e.month}/${e.day}：${formatNum(e.hours)}hr\n`; });
+    text += `小計：${formatNum(sH)}hr x ${sciRate} = ${sF}元\n`;
+    if (!isFamilyContext) text += `\n合計：${mF + sF}元`;
+    totalFee = mF + sF;
+    totalHrs = mH + sH;
+    count = mEv.length + sEv.length;
+  } else {
+    const ev = s.isMath ? mEv : sEv;
+    const rate = s.isMath ? mathRate : sciRate;
+    ev.forEach(e => { text += `${e.month}/${e.day}：${formatNum(e.hours)}hr\n`; });
+    const tH = ev.reduce((a, e) => a + e.hours, 0);
+    const tF = Math.round(tH * rate);
+    if (isFamilyContext) {
+      text += `小計：${formatNum(tH)}hr x ${rate} = ${tF}元\n`;
+    } else {
+      text += `\n共${formatNum(tH)}hr x ${rate} = ${tF}元`;
+    }
+    totalFee = tF;
+    totalHrs = tH;
+    count = ev.length;
+  }
+  return { text, totalFee, totalHrs, count };
+}
+
+function buildTeamSection(s, isFamilyContext) {
+  let text = '';
+  s.teamEntries.forEach(e => { text += `${e.date}：${formatNum(e.hours)}hr\n`; });
+  if (isFamilyContext) {
+    text += `小計：${formatNum(s.totalHours)}hr x ${s.rate} = ${s.totalFee}元\n`;
+  } else {
+    text += `\n共${formatNum(s.totalHours)}hr x ${s.rate} = ${s.totalFee}元`;
+  }
+  return { text, totalFee: s.totalFee, totalHrs: s.totalHours, count: s.count };
+}
+
+function validateRatesForChildren(children) {
+  for (const c of children) {
+    if (c.sourceType === 'personal') {
+      if (c.isMath) {
+        const r = getPersonalRate(c.rateCanonical, 'math');
+        if (!r || r <= 0) return `${c.displayName} 缺 Math 時薪`;
+      }
+      if (c.isSci) {
+        const r = getPersonalRate(c.rateCanonical, 'sci');
+        if (!r || r <= 0) return `${c.displayName} 缺 Science 時薪`;
+      }
+    }
+    // team: rate from Excel; should always be set
+  }
+  return null;
+}
+
+function getMomTitle() {
+  // 訊息文字內統一用「媽媽」(不冠學生名)
+  return '媽媽';
+}
+
+function getRecipientLabel(displayName) {
+  // 訊息卡片標題用,留學生名前綴讓 user 辨認是誰的訊息
+  let n = String(displayName)
+    .replace(/[(\(].*?[)\)]/g, '')
+    .replace(/\(\d+\)\s*$/, '')
+    .trim();
+  if (!n) n = String(displayName).trim();
+  return n + '媽媽';
+}
+
+function safeId(s) {
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+function buildSingleStudentMessage(c, month, greeting) {
+  const momTitle = getMomTitle();
+  const recipientLabel = getRecipientLabel(c.displayName);
+  let msg = `${momTitle}${greeting},以下和您確認${month}月 ${c.displayName} 同學的上課時數:\n\n`;
+  const sec = c.sourceType === 'personal'
+    ? buildPersonalSection(c, false)
+    : buildTeamSection(c, false);
+  msg += sec.text;
+  msg += `,謝謝${momTitle}`;
+  return { recipientLabel, msg, totalFee: sec.totalFee, totalHrs: sec.totalHrs, count: sec.count };
+}
+
+function buildMessageForParent(parentId, all) {
+  const parent = parents.find(p => p.id === parentId);
+  if (!parent) return null;
+  const childKeys = Object.keys(assignments).filter(k => assignments[k] === parentId);
+  const children = childKeys.map(k => all.find(s => s.key === k)).filter(Boolean);
+  if (children.length === 0) return { error: '此分組沒有學生' };
+
+  const errMsg = validateRatesForChildren(children);
+  if (errMsg) return { error: errMsg };
+
+  const [, month] = getSelectedYM();
+  const greeting = getGreeting();
+  const isFamily = children.length > 1;
+  const momTitle = getMomTitle();
+  const recipientLabel = getRecipientLabel(children[0].displayName); // 卡片標題用第一位學生辨識
+
+  let msg = '';
+  let totalFee = 0;
+  let totalHrs = 0;
+  let count = 0;
+  const names = children.map(c => c.displayName);
+
+  if (isFamily) {
+    msg = `${momTitle}${greeting},以下和您確認${month}月的上課時數:\n`;
+    children.forEach(c => {
+      msg += `\n【${c.displayName}】\n`;
+      const sec = c.sourceType === 'personal'
+        ? buildPersonalSection(c, true)
+        : buildTeamSection(c, true);
+      msg += sec.text;
+      totalFee += sec.totalFee;
+      totalHrs += sec.totalHrs;
+      count += sec.count;
+    });
+    msg += `\n合計:${totalFee}元,謝謝${momTitle}`;
+  } else {
+    const built = buildSingleStudentMessage(children[0], month, greeting);
+    msg = built.msg;
+    totalFee = built.totalFee;
+    totalHrs = built.totalHrs;
+    count = built.count;
+  }
+
+  return {
+    parentId, parentName: parent.name + ' (' + recipientLabel + ')',
+    name: names.join(' + '), msg,
+    totalFee, totalHours: totalHrs, count, isFamily
+  };
+}
+
+function generateForParent(parentId) {
+  const all = buildAllStudents();
+  const result = buildMessageForParent(parentId, all);
+  if (!result) return;
+  if (result.error) { showToast(result.error); return; }
+  _generatedMessages[parentId] = result;
+  renderMessages();
+  showToast(`已產出 ${result.name} 的請款訊息`);
+  setTimeout(() => {
+    const card = document.getElementById('msg-card-' + safeId(parentId));
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 100);
+}
+
+function generateForStudent(studentKey) {
+  const all = buildAllStudents();
+  const c = all.find(s => s.key === studentKey);
+  if (!c) { showToast('找不到學生'); return; }
+  const errMsg = validateRatesForChildren([c]);
+  if (errMsg) { showToast(errMsg); return; }
+  const [, month] = getSelectedYM();
+  const greeting = getGreeting();
+  const built = buildSingleStudentMessage(c, month, greeting);
+  const storeKey = 'student:' + studentKey;
+  _generatedMessages[storeKey] = {
+    parentId: storeKey, parentName: built.recipientLabel,
+    name: c.displayName, msg: built.msg,
+    totalFee: built.totalFee, totalHours: built.totalHrs, count: built.count,
+    isFamily: false
+  };
+  renderMessages();
+  showToast(`已產出 ${c.displayName} 的請款訊息`);
+  setTimeout(() => {
+    const card = document.getElementById('msg-card-' + safeId(storeKey));
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 100);
+}
+
+function generateAllMessages() {
+  const all = buildAllStudents();
+  if (parents.length === 0 && all.length === 0) { showToast('還沒有資料'); return; }
+  let count = 0;
+  let firstError = null;
+  const [, month] = getSelectedYM();
+  const greeting = getGreeting();
+
+  // 1. 家長分組
+  parents.forEach(p => {
+    const result = buildMessageForParent(p.id, all);
+    if (!result) return;
+    if (result.error) {
+      if (!firstError) firstError = `${p.name}:${result.error}`;
+      return;
+    }
+    _generatedMessages[p.id] = result;
+    count++;
+  });
+
+  // 2. 學生池中沒分組的(每位獨立一則)
+  all.filter(s => !assignments[s.key]).forEach(c => {
+    const errMsg = validateRatesForChildren([c]);
+    if (errMsg) {
+      if (!firstError) firstError = errMsg;
+      return;
+    }
+    const built = buildSingleStudentMessage(c, month, greeting);
+    const storeKey = 'student:' + c.key;
+    _generatedMessages[storeKey] = {
+      parentId: storeKey, parentName: built.recipientLabel,
+      name: c.displayName, msg: built.msg,
+      totalFee: built.totalFee, totalHours: built.totalHrs, count: built.count,
+      isFamily: false
+    };
+    count++;
+  });
+
+  if (count === 0) {
+    showToast(firstError || '沒有可產出的訊息');
+    return;
+  }
+  renderMessages();
+  showToast(`已產出 ${count} 則訊息` + (firstError ? `(部分跳過:${firstError})` : ''));
+  document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth' });
+}
+
+function renderMessages() {
+  const section = document.getElementById('resultsSection');
+  const list = document.getElementById('msgList');
+  const countEl = document.getElementById('resultsCount');
+  const entries = Object.entries(_generatedMessages);
+  if (entries.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  countEl.textContent = `已產出 ${entries.length} 則`;
+  list.innerHTML = entries.map(([pid, m]) => makeMsgCardHTML(pid, m)).join('');
+}
+
+function makeMsgCardHTML(parentId, m) {
+  const familyTag = m.isFamily
+    ? '<span style="font-size:0.72em;background:#e8daef;color:#6c3483;padding:2px 8px;border-radius:10px;margin-left:6px;">家庭</span>'
+    : '';
+  const sid = safeId(parentId);
+  const escKey = escapeAttr(parentId);
+  return `
+    <div class="msg-card" id="msg-card-${sid}">
+      <div class="msg-header" onclick="toggleMsgBody('${escKey}')">
+        <span class="name">${escapeHtml(m.parentName)} → ${escapeHtml(m.name)}${familyTag}</span>
+        <span class="summary">${m.count}堂 | ${formatNum(m.totalHours)}hr | $${m.totalFee.toLocaleString()}</span>
+      </div>
+      <div class="msg-body open" id="msg-body-${sid}">
+        <div class="msg-text">${escapeHtml(m.msg)}</div>
+        <div class="msg-actions">
+          <button class="btn-copy" onclick="copyMessage(this, '${escKey}')">複製此訊息</button>
+          <button class="btn-delete" onclick="deleteMessage('${escKey}')">移除</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleMsgBody(parentId) {
+  const body = document.getElementById('msg-body-' + safeId(parentId));
+  if (body) body.classList.toggle('open');
+}
+
+function copyMessage(btn, parentId) {
+  const m = _generatedMessages[parentId];
+  if (!m) return;
+  navigator.clipboard.writeText(m.msg).then(() => {
+    btn.textContent = '已複製!'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '複製此訊息'; btn.classList.remove('copied'); }, 1500);
+  }).catch(() => showToast('複製失敗,請手動選取'));
+}
+
+function deleteMessage(parentId) {
+  delete _generatedMessages[parentId];
+  renderMessages();
+}
+
+// ===== Init =====
+(function init() {
+  // 1. 先從 localStorage 載入(離線可用,Firebase 來之前的初版畫面)
+  loadParents();
+  loadAssignments();
+  loadSplits();
+  loadRenames();
+  const hasPersonal = restorePersonalRaw();
+  const hasTeam = restoreTeamRaw();
+  if (hasPersonal || hasTeam) onDataUpdated();
+  else if (parents.length > 0) {
+    document.getElementById('parentsSection').style.display = 'block';
+    renderParentsSection([]);
+  }
+  // 2. 連 Firebase,拉雲端最新後 onDataUpdated() 重 render
+  setupFirebaseSync();
+})();
+</script>
+</body>
+</html>
