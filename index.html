@@ -173,6 +173,10 @@ section.team h2 { border-left-color: #3498db; }
 }
 .student-row:active { cursor: grabbing; }
 .student-row.dragging { opacity: 0.4; }
+.student-row.billed { opacity: 0.45; background: #f0f0f0; }
+.student-row.billed .student-name { text-decoration: line-through; color: #999; }
+.student-chip.billed { opacity: 0.45; background: #f0f0f0; }
+.student-chip.billed .chip-name { text-decoration: line-through; color: #999; }
 .students-pool.dragover { background: #fdf8e3; }
 
 /* Pool two-column layout (Personal | Team) */
@@ -409,6 +413,7 @@ const TB_PARENTS = 'tb_parents_v1';
 const TB_ASSIGNMENTS = 'tb_assignments_v1';
 const TB_SPLITS = 'tb_splits_v1';
 const TB_RENAMES = 'tb_renames_v1';
+const TB_BILLED = 'tb_billed_v1';
 
 // ===== Firebase setup (cross-device sync) =====
 // Same Realtime DB as personal/team versions (project: tutor-billing-sync),
@@ -425,7 +430,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const fbDb = firebase.database();
 const FIXED_ROOM = 'MERGED_SYNC';
-const SYNC_KEYS = [TB_PERSONAL_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_TEAM_RAW];
+const SYNC_KEYS = [TB_PERSONAL_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_BILLED, TB_TEAM_RAW];
 let _skipSync = false;
 
 function pushToFirebase(key, data) {
@@ -449,6 +454,7 @@ function applySyncedValue(key, value) {
   else if (key === TB_ASSIGNMENTS) loadAssignments();
   else if (key === TB_SPLITS) loadSplits();
   else if (key === TB_RENAMES) loadRenames();
+  else if (key === TB_BILLED) loadBilled();
   else if (key === TB_TEAM_RAW) restoreTeamRaw();
   // TB_PERSONAL_RATES is read on demand via loadPersonalRates(), no in-memory cache
   _skipSync = false;
@@ -508,6 +514,39 @@ function setRename(sourceKey, displayName) {
 }
 function hasBeenSplit(sourceKey) {
   return splits.some(s => s.sourceKey === sourceKey);
+}
+
+// ===== Billed (已請款) — keyed by `${year}-${month}_${studentKey}` =====
+let billed = {};
+function loadBilled() {
+  try { billed = JSON.parse(localStorage.getItem(TB_BILLED)) || {}; }
+  catch { billed = {}; }
+}
+function saveBilled() {
+  try { localStorage.setItem(TB_BILLED, JSON.stringify(billed)); } catch {}
+  pushToFirebase(TB_BILLED, billed);
+}
+function billedKeyFor(studentKey, year, month) {
+  return `${year}-${month}_${studentKey}`;
+}
+function isStudentBilled(studentKey) {
+  const [y, m] = getSelectedYM();
+  if (!y) return false;
+  return !!billed[billedKeyFor(studentKey, y, m)];
+}
+function setBilledForStudents(studentKeys, checked) {
+  const [y, m] = getSelectedYM();
+  if (!y) return;
+  studentKeys.forEach(k => {
+    const bk = billedKeyFor(k, y, m);
+    if (checked) billed[bk] = true;
+    else delete billed[bk];
+  });
+  saveBilled();
+}
+function isMessageBilled(m) {
+  if (!m.studentKeys || m.studentKeys.length === 0) return false;
+  return m.studentKeys.every(k => isStudentBilled(k));
 }
 
 function renameSource(sourceKey, originalName) {
@@ -860,10 +899,18 @@ function parseTeamStudents(data) {
     if (entries.length === 0) continue;
     const totalHours = entries.reduce((s, e) => s + e.hours, 0);
     const totalFee = totalHours * numRate;
+    // 教材費 = 最後一個日期 row 的下一列(dateEndRow 即此位置)該學生欄位的數字
+    let materialFee = 0;
+    const matCell = data[dateEndRow] ? data[dateEndRow][col] : null;
+    if (matCell !== null && matCell !== undefined && matCell !== '') {
+      const m = Number(matCell);
+      if (!isNaN(m) && m > 0) materialFee = Math.round(m);
+    }
     students.push({
       name: cleanName, subject, rate: numRate,
       entries: entries.sort((a, b) => a.dateObj - b.dateObj),
       totalHours, totalFee: Math.round(totalFee), count: entries.length,
+      materialFee,
       month, year
     });
   }
@@ -1096,8 +1143,35 @@ function buildOneFromTeam(s, keyOverride, displayNameOverride) {
     count: s.count, totalHours: s.totalHours, totalFee: s.totalFee,
     rate: s.rate, subject: s.subject,
     teamEntries: s.entries,
+    materialFee: s.materialFee || 0,
     year: s.year, month: s.month
   };
+}
+
+// ===== Last-class-date / payable date helpers =====
+function getLastClassDate(c) {
+  if (c.sourceType === 'personal') {
+    const dates = [
+      ...(c.personalEv?.mEv || []).map(e => e.date),
+      ...(c.personalEv?.sEv || []).map(e => e.date)
+    ];
+    if (dates.length === 0) return null;
+    return new Date(Math.max(...dates.map(d => d.getTime())));
+  }
+  if (c.sourceType === 'team') {
+    const last = c.teamEntries && c.teamEntries[c.teamEntries.length - 1];
+    return last ? last.dateObj : null;
+  }
+  return null;
+}
+function getMaxLastClassDate(children) {
+  const dates = children.map(getLastClassDate).filter(Boolean);
+  if (dates.length === 0) return null;
+  return new Date(Math.max(...dates.map(d => d.getTime())));
+}
+function formatPayableDate(d) {
+  if (!d) return '';
+  return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
 function buildAllStudents() {
@@ -1198,8 +1272,9 @@ function makeStudentChip(s) {
     tools = `${renameIcon}
        <button class="btn-split" onclick="event.stopPropagation();splitStudent('${s.key}')" title="一對多">⊕</button>`;
   }
+  const billedClass = isStudentBilled(s.key) ? ' billed' : '';
   return `
-    <span class="student-chip" draggable="true"
+    <span class="student-chip${billedClass}" draggable="true"
           data-key="${escapeAttr(s.key)}"
           ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
           ondragend="onChipDragEnd(event)">
@@ -1231,8 +1306,9 @@ function renderUnassignedPool(all, year, month) {
   const teamOnes = unassigned.filter(s => s.sourceType === 'team').sort(sortFn);
 
   function rowHtml(s) {
+    const billedClass = isStudentBilled(s.key) ? ' billed' : '';
     return `
-      <div class="student-row" draggable="true"
+      <div class="student-row${billedClass}" draggable="true"
            data-key="${escapeAttr(s.key)}"
            ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
            ondragend="onChipDragEnd(event)">
@@ -1485,8 +1561,21 @@ function buildSingleStudentMessage(c, month, greeting) {
     ? buildPersonalSection(c, false)
     : buildTeamSection(c, false);
   msg += sec.text;
+  // 教材費(只 Team 有)+ 合計
+  const materialFee = c.materialFee || 0;
+  let grand = sec.totalFee;
+  if (materialFee > 0) {
+    msg += `\n教材費:${materialFee}元`;
+    grand = sec.totalFee + materialFee;
+    msg += `\n合計:${grand}元`;
+  }
+  // 可請款日
+  const lastDate = getLastClassDate(c);
+  if (lastDate) {
+    msg += `\n\n可請款日:${formatPayableDate(lastDate)} 後`;
+  }
   msg += `,謝謝${momTitle}`;
-  return { recipientLabel, msg, totalFee: sec.totalFee, totalHrs: sec.totalHrs, count: sec.count };
+  return { recipientLabel, msg, totalFee: grand, totalHrs: sec.totalHrs, count: sec.count };
 }
 
 function buildMessageForParent(parentId, all) {
@@ -1513,6 +1602,7 @@ function buildMessageForParent(parentId, all) {
 
   if (isFamily) {
     msg = `${momTitle}${greeting},以下和您確認${month}月的上課時數:\n`;
+    let totalMat = 0;
     children.forEach(c => {
       msg += `\n【${c.displayName}】\n`;
       const sec = c.sourceType === 'personal'
@@ -1522,8 +1612,18 @@ function buildMessageForParent(parentId, all) {
       totalFee += sec.totalFee;
       totalHrs += sec.totalHrs;
       count += sec.count;
+      const mat = c.materialFee || 0;
+      if (mat > 0) {
+        msg += `教材費:${mat}元\n`;
+        totalMat += mat;
+      }
     });
-    msg += `\n合計:${totalFee}元,謝謝${momTitle}`;
+    const grand = totalFee + totalMat;
+    msg += `\n合計:${grand}元`;
+    const lastDate = getMaxLastClassDate(children);
+    if (lastDate) msg += `\n可請款日:${formatPayableDate(lastDate)} 後`;
+    msg += `,謝謝${momTitle}`;
+    totalFee = grand;
   } else {
     const built = buildSingleStudentMessage(children[0], month, greeting);
     msg = built.msg;
@@ -1535,7 +1635,8 @@ function buildMessageForParent(parentId, all) {
   return {
     parentId, parentName: parent.name + ' (' + recipientLabel + ')',
     name: names.join(' + '), msg,
-    totalFee, totalHours: totalHrs, count, isFamily
+    totalFee, totalHours: totalHrs, count, isFamily,
+    studentKeys: children.map(c => c.key)
   };
 }
 
@@ -1567,7 +1668,8 @@ function generateForStudent(studentKey) {
     parentId: storeKey, parentName: built.recipientLabel,
     name: c.displayName, msg: built.msg,
     totalFee: built.totalFee, totalHours: built.totalHrs, count: built.count,
-    isFamily: false
+    isFamily: false,
+    studentKeys: [c.key]
   };
   renderMessages();
   showToast(`已產出 ${c.displayName} 的請款訊息`);
@@ -1644,8 +1746,10 @@ function makeMsgCardHTML(parentId, m) {
     : '';
   const sid = safeId(parentId);
   const escKey = escapeAttr(parentId);
+  const isBilled = isMessageBilled(m);
+  const cardClass = isBilled ? 'msg-card billed' : 'msg-card';
   return `
-    <div class="msg-card" id="msg-card-${sid}">
+    <div class="${cardClass}" id="msg-card-${sid}">
       <div class="msg-header" onclick="toggleMsgBody('${escKey}')">
         <span class="name">${escapeHtml(m.parentName)} → ${escapeHtml(m.name)}${familyTag}</span>
         <span class="summary">${m.count}堂 | ${formatNum(m.totalHours)}hr | $${m.totalFee.toLocaleString()}</span>
@@ -1654,11 +1758,23 @@ function makeMsgCardHTML(parentId, m) {
         <div class="msg-text">${escapeHtml(m.msg)}</div>
         <div class="msg-actions">
           <button class="btn-copy" onclick="copyMessage(this, '${escKey}')">複製此訊息</button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:0.88em;color:#555;cursor:pointer;">
+            <input type="checkbox" ${isBilled ? 'checked' : ''} onchange="setMessageBilled('${escKey}', this.checked)">
+            已請款
+          </label>
           <button class="btn-delete" onclick="deleteMessage('${escKey}')">移除</button>
         </div>
       </div>
     </div>
   `;
+}
+
+function setMessageBilled(parentId, checked) {
+  const m = _generatedMessages[parentId];
+  if (!m || !m.studentKeys) return;
+  setBilledForStudents(m.studentKeys, checked);
+  renderMessages();
+  renderAll(); // 學生池也要重 render 反映淺色狀態
 }
 
 function toggleMsgBody(parentId) {
@@ -1687,6 +1803,7 @@ function deleteMessage(parentId) {
   loadAssignments();
   loadSplits();
   loadRenames();
+  loadBilled();
   const hasPersonal = restorePersonalRaw();
   const hasTeam = restoreTeamRaw();
   if (hasPersonal || hasTeam) onDataUpdated();
