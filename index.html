@@ -959,9 +959,8 @@ function parseTeamStudents(data) {
     for (let r = dateStartRow; r < dateEndRow; r++) {
       const val = data[r] ? data[r][col] : null;
       const dateCell = data[r] ? data[r][0] : null;
-      if (val === null || val === undefined || val === '') continue;
-      const numVal = Number(val);
-      if (isNaN(numVal)) continue;
+      const numVal = parseTeamHours(val);
+      if (numVal === null) continue;
       const d = parseExcelDate(dateCell);
       if (!d) continue;
       entries.push({
@@ -1014,6 +1013,26 @@ function parseExcelDate(val) {
   const s = String(val).trim();
   const d = new Date(s);
   if (!isNaN(d.getTime())) return d;
+  return null;
+}
+
+// Team Excel 儲存格代表「這天有課」的兩種格式:
+// 1. 純數字(例 2 / 1.5)→ 直接當小時數
+// 2. 時間區間(例 0930-1130 / 09:30-11:30 / 9:30~11:30)→ 換算成小時數
+// 其他內容(空白、文字、註記)回 null,當作沒課
+function parseTeamHours(val) {
+  if (val === null || val === undefined || val === '') return null;
+  if (typeof val === 'number') return isNaN(val) ? null : val;
+  const s = String(val).trim();
+  if (s === '') return null;
+  if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
+  const m = s.match(/^(\d{1,2}):?(\d{2})\s*[-~–—]\s*(\d{1,2}):?(\d{2})$/);
+  if (m) {
+    const startMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    const endMin = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
+    const diff = endMin - startMin;
+    if (diff > 0) return diff / 60;
+  }
   return null;
 }
 
