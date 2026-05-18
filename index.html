@@ -956,16 +956,21 @@ function parseTeamStudents(data) {
     const subject = data[subjectRow] ? String(data[subjectRow][col] || '').trim() : '';
     const numRate = Number(rate);
     const entries = [];
+    const scheduledDates = [];
     for (let r = dateStartRow; r < dateEndRow; r++) {
       const val = data[r] ? data[r][col] : null;
       const dateCell = data[r] ? data[r][0] : null;
-      const numVal = parseTeamHours(val);
-      if (numVal === null) continue;
+      const cls = classifyTeamCell(val);
+      if (!cls) continue;
       const d = parseExcelDate(dateCell);
       if (!d) continue;
+      if (cls.type === 'scheduled') {
+        scheduledDates.push(d);
+        continue;
+      }
       entries.push({
         date: (d.getMonth() + 1) + '/' + d.getDate(),
-        hours: numVal,
+        hours: cls.hours,
         dateObj: d,
         year: d.getFullYear(),
         month: d.getMonth() + 1,
@@ -985,6 +990,7 @@ function parseTeamStudents(data) {
     students.push({
       name: cleanName, subject, rate: numRate,
       entries: entries.sort((a, b) => a.dateObj - b.dateObj),
+      scheduledDates: scheduledDates.sort((a, b) => a - b),
       totalHours, totalFee: Math.round(totalFee), count: entries.length,
       materialFee,
       month, year
@@ -1016,23 +1022,17 @@ function parseExcelDate(val) {
   return null;
 }
 
-// Team Excel 儲存格代表「這天有課」的兩種格式:
-// 1. 純數字(例 2 / 1.5)→ 直接當小時數
-// 2. 時間區間(例 0930-1130 / 09:30-11:30 / 9:30~11:30)→ 換算成小時數
-// 其他內容(空白、文字、註記)回 null,當作沒課
-function parseTeamHours(val) {
+// Team Excel 儲存格分類:
+// 1. 純數字(例 2 / 1.5)→ 已上完課,計入時數/費用
+// 2. 時間區間(例 0930-1130 / 09:30-11:30)→ 已排但未上,不計時數,但要推「可請款日」
+// 其他內容(空白、文字、註記)→ 不是課
+function classifyTeamCell(val) {
   if (val === null || val === undefined || val === '') return null;
-  if (typeof val === 'number') return isNaN(val) ? null : val;
+  if (typeof val === 'number') return isNaN(val) ? null : { type: 'billable', hours: val };
   const s = String(val).trim();
   if (s === '') return null;
-  if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-  const m = s.match(/^(\d{1,2}):?(\d{2})\s*[-~–—]\s*(\d{1,2}):?(\d{2})$/);
-  if (m) {
-    const startMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-    const endMin = parseInt(m[3], 10) * 60 + parseInt(m[4], 10);
-    const diff = endMin - startMin;
-    if (diff > 0) return diff / 60;
-  }
+  if (/^-?\d+(\.\d+)?$/.test(s)) return { type: 'billable', hours: Number(s) };
+  if (/^\d{1,2}:?\d{2}\s*[-~–—]\s*\d{1,2}:?\d{2}$/.test(s)) return { type: 'scheduled' };
   return null;
 }
 
@@ -1127,7 +1127,8 @@ function cacheTeamRaw() {
   try {
     const dump = teamStudents.map(s => ({
       ...s,
-      entries: s.entries.map(e => ({ ...e, dateObj: e.dateObj.toISOString() }))
+      entries: s.entries.map(e => ({ ...e, dateObj: e.dateObj.toISOString() })),
+      scheduledDates: (s.scheduledDates || []).map(d => d.toISOString())
     }));
     localStorage.setItem(TB_TEAM_RAW, JSON.stringify(dump));
     pushToFirebase(TB_TEAM_RAW, dump);
@@ -1139,7 +1140,8 @@ function restoreTeamRaw() {
     if (!raw || !Array.isArray(raw)) return false;
     teamStudents = raw.map(s => ({
       ...s,
-      entries: (s.entries || []).map(e => ({ ...e, dateObj: new Date(e.dateObj) }))
+      entries: (s.entries || []).map(e => ({ ...e, dateObj: new Date(e.dateObj) })),
+      scheduledDates: (s.scheduledDates || []).map(d => new Date(d))
     }));
     if (teamStudents.length > 0) {
       document.getElementById('uploadExcel').classList.add('loaded');
@@ -1239,6 +1241,7 @@ function buildOneFromTeam(s, keyOverride, displayNameOverride) {
     count: s.count, totalHours: s.totalHours, totalFee: s.totalFee,
     rate: s.rate, subject: s.subject,
     teamEntries: s.entries,
+    teamScheduled: s.scheduledDates || [],
     materialFee: s.materialFee || 0,
     year: s.year, month: s.month
   };
@@ -1255,8 +1258,11 @@ function getLastClassDate(c) {
     return new Date(Math.max(...dates.map(d => d.getTime())));
   }
   if (c.sourceType === 'team') {
-    const last = c.teamEntries && c.teamEntries[c.teamEntries.length - 1];
-    return last ? last.dateObj : null;
+    const allDates = [];
+    if (c.teamEntries) c.teamEntries.forEach(e => { if (e.dateObj) allDates.push(e.dateObj); });
+    if (c.teamScheduled) c.teamScheduled.forEach(d => { if (d) allDates.push(d); });
+    if (allDates.length === 0) return null;
+    return new Date(Math.max(...allDates.map(d => d.getTime())));
   }
   return null;
 }
