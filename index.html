@@ -947,12 +947,17 @@ function parseTeamStudents(data) {
   }
 
   const students = [];
+  const skipped = [];
   const totalCols = data[studentRow] ? data[studentRow].length : 0;
   for (let col = 3; col < totalCols; col++) {
     const studentName = data[studentRow] ? data[studentRow][col] : null;
     const rate = data[rateRow] ? data[rateRow][col] : null;
-    if (!studentName || !rate || isNaN(Number(rate))) continue;
-    const cleanName = String(studentName).replace(/\n/g, '、');
+    if (!studentName) continue;
+    if (!rate || isNaN(Number(rate))) {
+      skipped.push(`${String(studentName).replace(/\n/g, '、').trim()}(col ${col + 1}:時薪欄空白或非數字)`);
+      continue;
+    }
+    const cleanName = String(studentName).replace(/\n/g, '、').trim();
     const subject = data[subjectRow] ? String(data[subjectRow][col] || '').trim() : '';
     const numRate = Number(rate);
     const entries = [];
@@ -977,7 +982,13 @@ function parseTeamStudents(data) {
         day: d.getDate()
       });
     }
-    if (entries.length === 0) continue;
+    if (entries.length === 0) {
+      const reason = scheduledDates.length > 0
+        ? '本月僅有時間區間 cell(尚未上課)'
+        : '本月無任何課堂';
+      skipped.push(`${cleanName}(col ${col + 1}:${reason})`);
+      continue;
+    }
     const totalHours = entries.reduce((s, e) => s + e.hours, 0);
     const totalFee = totalHours * numRate;
     // 教材費 = 最後一個日期 row 的下一列(dateEndRow 即此位置)該學生欄位的數字
@@ -997,7 +1008,9 @@ function parseTeamStudents(data) {
     });
   }
 
-  // Duplicate name detection: append subject suffix
+  // Duplicate name detection 兩段:
+  //   Pass 1: 同名 + 有 subject → 加科目後綴(李家溱 → 李家溱（Math）)
+  //   Pass 2: 仍同名(同名同科 / 雙方無 subject) → 加序號(李家溱（Math）→ 李家溱（Math）①)
   const nameCount = {};
   students.forEach(s => { nameCount[s.name] = (nameCount[s.name] || 0) + 1; });
   students.forEach(s => {
@@ -1005,7 +1018,26 @@ function parseTeamStudents(data) {
       s.name = s.name + '（' + s.subject + '）';
     }
   });
+  const finalCount = {};
+  students.forEach(s => { finalCount[s.name] = (finalCount[s.name] || 0) + 1; });
+  const seen = {};
+  const dupSeries = [];
+  const circled = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
+  students.forEach(s => {
+    if (finalCount[s.name] > 1) {
+      seen[s.name] = (seen[s.name] || 0) + 1;
+      const tag = circled[seen[s.name] - 1] || `(${seen[s.name]})`;
+      const newName = `${s.name}${tag}`;
+      dupSeries.push(`${s.name} → ${newName}`);
+      s.name = newName;
+    }
+  });
 
+  // 把診斷資訊掛在 array 上,讓上層(loadExcel)能取出顯示
+  students._skipped = skipped;
+  students._dupSeries = dupSeries;
+  if (skipped.length > 0) console.warn('[parseTeamStudents] 跳過的欄位:', skipped);
+  if (dupSeries.length > 0) console.warn('[parseTeamStudents] 同名同科加序號:', dupSeries);
   return students;
 }
 
@@ -1086,12 +1118,45 @@ async function loadExcel(file) {
     const students = await parseExcelFile(file);
     if (students.length === 0) { showToast('Excel 中沒找到學生資料'); return; }
     teamStudents = students;
+    const skipped = students._skipped || [];
+    const dupSeries = students._dupSeries || [];
     document.getElementById('uploadExcel').classList.add('loaded');
-    document.getElementById('fileNameExcel').textContent = file.name + ' (' + students.length + ' 位學生)';
+    let label = file.name + ' (' + students.length + ' 位學生';
+    if (skipped.length > 0) label += `,跳過 ${skipped.length} 欄`;
+    if (dupSeries.length > 0) label += `,同名加序 ${dupSeries.length}`;
+    label += ')';
+    document.getElementById('fileNameExcel').textContent = label;
+    showTeamParseNotice(skipped, dupSeries);
     cacheTeamRaw();
     onDataUpdated();
     showToast(`Team Excel 已載入 ${students.length} 位學生`);
   } catch (err) { showToast('Excel 解析失敗：' + err.message); }
+}
+
+// 顯示 / 收起 解析時的細節(跳過欄、同名加序號),點檔名旁的訊息可展開
+function showTeamParseNotice(skipped, dupSeries) {
+  let box = document.getElementById('teamParseNotice');
+  if (!skipped.length && !dupSeries.length) {
+    if (box) box.remove();
+    return;
+  }
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'teamParseNotice';
+    box.style.cssText = 'margin:8px 0; padding:8px 10px; background:#fff7ed; border:1px solid #fdba74; border-radius:6px; font-size:13px; color:#7c2d12; line-height:1.6;';
+    const anchor = document.getElementById('fileNameExcel');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
+    else document.body.appendChild(box);
+  }
+  let html = '';
+  if (skipped.length > 0) {
+    html += `<div><strong>⚠ Team Excel 跳過 ${skipped.length} 個欄位:</strong></div>`;
+    html += '<ul style="margin:4px 0 4px 18px; padding:0;">' + skipped.map(s => `<li>${escapeHtml(s)}</li>`).join('') + '</ul>';
+  }
+  if (dupSeries.length > 0) {
+    html += `<div style="margin-top:4px;"><strong>ℹ 同名加序號:</strong> ${dupSeries.map(s => escapeHtml(s)).join('、')}</div>`;
+  }
+  box.innerHTML = html;
 }
 
 // ===== Cache to localStorage (so reload doesn't lose data) =====
