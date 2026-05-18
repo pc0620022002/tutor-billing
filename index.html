@@ -982,11 +982,10 @@ function parseTeamStudents(data) {
         day: d.getDate()
       });
     }
-    if (entries.length === 0) {
-      const reason = scheduledDates.length > 0
-        ? '本月僅有時間區間 cell(尚未上課)'
-        : '本月無任何課堂';
-      skipped.push(`${cleanName}(col ${col + 1}:${reason})`);
+    // 本月真的什麼都沒有 → 跳過;只有時間區間(尚未上課) → 仍進池子,時數 0hr,
+    // 讓 user 可以先手動分組
+    if (entries.length === 0 && scheduledDates.length === 0) {
+      skipped.push(`${cleanName}(col ${col + 1}:本月無任何課堂)`);
       continue;
     }
     const totalHours = entries.reduce((s, e) => s + e.hours, 0);
