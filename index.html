@@ -1803,9 +1803,19 @@ function buildMessageForParent(parentId, all) {
     const hasPersonal = children.some(c => c.sourceType === 'personal');
     const hasTeam = children.some(c => c.sourceType === 'team');
     const isMixed = hasPersonal && hasTeam;
+    // displayName 在這個分組重複幾次 → 用來判斷是否要加科目後綴
+    const nameCounts = {};
+    children.forEach(c => { nameCounts[c.displayName] = (nameCounts[c.displayName] || 0) + 1; });
     children.forEach(c => {
-      const teamSuffix = (isMixed && c.sourceType === 'team') ? ' (team)' : '';
-      msg += `\n【${c.displayName}${teamSuffix}】\n`;
+      let suffix = '';
+      if (c.sourceType === 'team') {
+        if (isMixed) suffix = ' (team)';
+      } else if (nameCounts[c.displayName] > 1 && !c.isBoth) {
+        // 同分組同名 Personal(非 isBoth)→ 標科目讓家長分得出來
+        if (c.isMath) suffix = ' (Math)';
+        else if (c.isSci) suffix = ' (Science)';
+      }
+      msg += `\n【${c.displayName}${suffix}】\n`;
       const sec = c.sourceType === 'personal'
         ? buildPersonalSection(c, true)
         : buildTeamSection(c, true);
