@@ -250,6 +250,22 @@ section.team h2 { border-left-color: #3498db; }
   background: #fef9e7; border: 1px solid #f9e79f;
   padding: 2px 4px; border-radius: 8px; text-align: center;
 }
+/* 可請款狀態(可請款日 ≤ 今天 且 未勾已請款):chip 變綠 + 鈴鐺前綴 */
+.student-payable.ready {
+  color: #fff;
+  background: #16a085;
+  border-color: #138d75;
+  font-weight: 600;
+}
+.student-row.payable-ready > .cell-name .student-name::before,
+.parent-lane.payable-ready .parent-name::before {
+  content: '🔔';
+  margin-right: 3px;
+}
+.student-chip.payable-ready .chip-name::before {
+  content: '🔔';
+  margin-right: 2px;
+}
 .rate-input {
   width: 100%; padding: 3px 4px; border: 1px solid #ddd; border-radius: 4px;
   font-size: 0.85em; text-align: right; min-width: 0;
@@ -1339,6 +1355,28 @@ function formatPayableDate(d) {
   if (!d) return '';
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
+// 今天 00:00 的本機 Date,用來跟可請款日比對
+function todayLocalMidnight() {
+  const t = new Date();
+  return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+}
+function isDateOnOrBeforeToday(d) {
+  if (!d) return false;
+  const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return dd <= todayLocalMidnight();
+}
+// 學生可請款 = 可請款日已到 + 未勾已請款
+function isStudentPayableNow(s) {
+  if (!s) return false;
+  if (isStudentBilled(s.key)) return false;
+  return isDateOnOrBeforeToday(getLastClassDate(s));
+}
+// 家長分組可請款 = 組內最晚可請款日已到 + 至少一位學生未勾已請款
+function isLanePayableNow(children) {
+  if (!children || children.length === 0) return false;
+  if (!isDateOnOrBeforeToday(getMaxLastClassDate(children))) return false;
+  return children.some(c => !isStudentBilled(c.key));
+}
 
 function buildAllStudents() {
   const [year, month] = getSelectedYM();
@@ -1407,8 +1445,12 @@ function renderParentsSection(all) {
 
     const msgInline = renderInlineMsgFor(p.id);
     const lanePayable = getMaxLastClassDate(children);
+    const lanePayableNow = isLanePayableNow(children);
+    const lanePayableReadyClass = lanePayableNow ? ' payable-ready' : '';
     const lanePayableHtml = lanePayable
-      ? `<span class="student-payable" title="此分組內最晚的可請款日">📅 ${formatPayableDate(lanePayable)} 後</span>`
+      ? (lanePayableNow
+          ? `<span class="student-payable ready" title="可請款:組內最晚可請款日已到,且仍有學生未勾已請款">💸 可請款</span>`
+          : `<span class="student-payable" title="此分組內最晚的可請款日">📅 ${formatPayableDate(lanePayable)} 後</span>`)
       : '';
     const owner = getBillingOwner(p.id);
     const ownerClass = ' owner-' + owner;
@@ -1418,7 +1460,7 @@ function renderParentsSection(all) {
     </label>`;
 
     return `
-      <div class="parent-lane${ownerClass}" id="parent-lane-${p.id}"
+      <div class="parent-lane${ownerClass}${lanePayableReadyClass}" id="parent-lane-${p.id}"
            ondragover="onLaneDragOver(event, '${p.id}')"
            ondragleave="onLaneDragLeave(event)"
            ondrop="onLaneDrop(event, '${p.id}')">
@@ -1461,8 +1503,9 @@ function makeStudentChip(s) {
        <button class="btn-split" onclick="event.stopPropagation();splitStudent('${s.key}')" title="一對多">⊕</button>`;
   }
   const billedClass = isStudentBilled(s.key) ? ' billed' : '';
+  const payableReadyClass = isStudentPayableNow(s) ? ' payable-ready' : '';
   return `
-    <span class="student-chip${billedClass}" draggable="true"
+    <span class="student-chip${billedClass}${payableReadyClass}" draggable="true"
           data-key="${escapeAttr(s.key)}"
           ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
           ondragend="onChipDragEnd(event)">
@@ -1498,8 +1541,12 @@ function renderUnassignedPool(all, year, month) {
     const owner = getBillingOwner(s.key);
     const ownerClass = ' owner-' + owner;
     const lastDate = getLastClassDate(s);
+    const payableNow = isStudentPayableNow(s);
+    const payableReadyClass = payableNow ? ' payable-ready' : '';
     const payableHtml = lastDate
-      ? `<span class="student-payable" title="可請款日(該學生本月最後上課日)">📅 ${formatPayableDate(lastDate)} 後</span>`
+      ? (payableNow
+          ? `<span class="student-payable ready" title="可請款:可請款日已到,且尚未勾已請款">💸 可請款</span>`
+          : `<span class="student-payable" title="可請款日(該學生本月最後上課日)">📅 ${formatPayableDate(lastDate)} 後</span>`)
       : `<span></span>`;
     const splitTag = s.source === 'split'
       ? ' <span class="source-tag '+s.tagClass+'" style="font-size:0.7em;">分身</span>'
@@ -1510,7 +1557,7 @@ function renderUnassignedPool(all, year, month) {
     </label>`;
     const msgInline = renderInlineMsgFor('student:' + s.key);
     return `
-      <div class="student-row${billedClass}${ownerClass}" id="student-row-${safeId(s.key)}" draggable="true"
+      <div class="student-row${billedClass}${ownerClass}${payableReadyClass}" id="student-row-${safeId(s.key)}" draggable="true"
            data-key="${escapeAttr(s.key)}"
            ondragstart="onChipDragStart(event, '${escapeAttr(s.key)}')"
            ondragend="onChipDragEnd(event)">
