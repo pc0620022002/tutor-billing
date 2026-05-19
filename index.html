@@ -1449,7 +1449,7 @@ function renderParentsSection(all) {
     const lanePayableReadyClass = lanePayableNow ? ' payable-ready' : '';
     const lanePayableHtml = lanePayable
       ? (lanePayableNow
-          ? `<span class="student-payable ready" title="可請款:組內最晚可請款日已到,且仍有學生未勾已請款">💸 可請款</span>`
+          ? `<span class="student-payable ready" title="可請款:組內最晚可請款日已到,且仍有學生未勾已請款">💸 ${formatPayableDate(lanePayable)} 起可請款</span>`
           : `<span class="student-payable" title="此分組內最晚的可請款日">📅 ${formatPayableDate(lanePayable)} 後</span>`)
       : '';
     const owner = getBillingOwner(p.id);
@@ -1545,7 +1545,7 @@ function renderUnassignedPool(all, year, month) {
     const payableReadyClass = payableNow ? ' payable-ready' : '';
     const payableHtml = lastDate
       ? (payableNow
-          ? `<span class="student-payable ready" title="可請款:可請款日已到,且尚未勾已請款">💸 可請款</span>`
+          ? `<span class="student-payable ready" title="可請款:可請款日已到,且尚未勾已請款">💸 ${formatPayableDate(lastDate)} 起可請款</span>`
           : `<span class="student-payable" title="可請款日(該學生本月最後上課日)">📅 ${formatPayableDate(lastDate)} 後</span>`)
       : `<span></span>`;
     const splitTag = s.source === 'split'
