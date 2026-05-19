@@ -220,9 +220,10 @@ section.team h2 { border-left-color: #3498db; }
 .pool-column-list .student-row {
   display: grid;
   grid-template-columns:
-    minmax(95px, 1fr)     /* 學生名 + 分身 tag,吃剩餘空間 */
+    minmax(110px, 1fr)    /* 學生名 + 分身 tag,吃剩餘空間 */
+    52px                  /* 老公勾選(獨立直排對齊) */
     72px                  /* 堂數 · 時數 */
-    78px                  /* 可請款日 */
+    120px                 /* 可請款日(夠放「💸 5/15 起可請款」) */
     72px                  /* Math 時薪 */
     72px                  /* Sci 時薪 */
     50px                  /* 改名 */
@@ -233,8 +234,11 @@ section.team h2 { border-left-color: #3498db; }
   gap: 6px;
   padding: 8px 6px;
   flex-wrap: unset; /* override .student-row 原本 flex 設定 */
-  min-width: 660px;
+  min-width: 720px;
   font-size: 0.85em;
+}
+.pool-column-list .cell-owner {
+  display: flex; align-items: center; justify-content: center;
 }
 .pool-column-list .cell-name {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1563,8 +1567,8 @@ function renderUnassignedPool(all, year, month) {
            ondragend="onChipDragEnd(event)">
         <span class="cell-name">
           <span class="student-name">${escapeHtml(s.displayName)}${splitTag}</span>
-          ${ownerToggle}
         </span>
+        <span class="cell-owner">${ownerToggle}</span>
         <span class="cell-info">${s.count}堂 · ${formatNum(s.totalHours)}hr</span>
         ${payableHtml}
         <span class="cell-math">${renderMathCell(s)}</span>
