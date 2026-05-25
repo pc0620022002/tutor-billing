@@ -1284,8 +1284,9 @@ function detectAvailableMonths() {
   const set = new Set();
   [...mathEvents, ...scienceEvents].forEach(e => set.add(`${e.year}-${e.month}`));
   teamStudents.forEach(s => { if (s.year && s.month) set.add(`${s.year}-${s.month}`); });
-  const arr = [...set].sort().reverse();
-  return arr;
+  // 依時間新到舊排(用 y*12+mo 數值排序,跨年 / 兩位數月份也正確,不會出現字串排序把 2026-10 排到 2026-5 前面)
+  const ymVal = s => { const [y, mo] = s.split('-').map(Number); return y * 12 + mo; };
+  return [...set].sort((a, b) => ymVal(b) - ymVal(a));
 }
 function setupMonthSelector() {
   const months = detectAvailableMonths();
@@ -1296,7 +1297,12 @@ function setupMonthSelector() {
     const [y, mo] = m.split('-');
     return `<option value="${m}">${y}年${mo}月</option>`;
   }).join('');
+  // 預設選「今天的當月」(首次載入);重繪 / 同步時保留使用者當下已選的月(不跳月);
+  // 當月沒資料才退而選最新月(= select 預設的第一個 option,等同舊行為)
+  const now = new Date();
+  const currentYM = `${now.getFullYear()}-${now.getMonth() + 1}`;
   if (prev && months.includes(prev)) sel.value = prev;
+  else if (months.includes(currentYM)) sel.value = currentYM;
   document.getElementById('settings').style.display = 'block';
 }
 function getSelectedYM() {
