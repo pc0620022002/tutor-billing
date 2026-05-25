@@ -184,6 +184,9 @@ section.team h2 { border-left-color: #3498db; }
 .student-row.billed { background: #f0f0f0; }   /* billed 蓋過 owner 色 */
 .parent-lane.owner-wife { background: #fdedf0; border-color: #f5b7c4; }
 .parent-lane.owner-me   { background: #e3f2fd; border-color: #90caf9; }
+/* 整組已請款(組內學生全勾已請款)→ 整個框變灰,蓋過粉紅/藍底,比照學生池 */
+.parent-lane.billed { background: #f0f0f0; border-color: #ddd; opacity: 0.55; }
+.parent-lane.billed .parent-name { text-decoration: line-through; color: #999; }
 .owner-toggle {
   display: inline-flex; align-items: center; gap: 3px;
   font-size: 0.78em; color: #555; cursor: pointer; user-select: none;
@@ -484,6 +487,7 @@ section.team h2 { border-left-color: #3498db; }
 const TB_PERSONAL_RAW = 'tb_personal_raw_v1';
 const TB_TEAM_RAW = 'tb_team_raw_v1';
 const TB_PERSONAL_RATES = 'tb_personal_rates_v1';
+const TB_TEAM_RATES = 'tb_team_rates_v1';   // 手動覆蓋 Team 時薪(沒設就用 Excel 帶入的)
 const TB_PARENTS = 'tb_parents_v1';
 const TB_ASSIGNMENTS = 'tb_assignments_v1';
 const TB_SPLITS = 'tb_splits_v1';
@@ -506,7 +510,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const fbDb = firebase.database();
 const FIXED_ROOM = 'MERGED_SYNC';
-const SYNC_KEYS = [TB_PERSONAL_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_BILLED, TB_BILLING_OWNER, TB_TEAM_RAW];
+const SYNC_KEYS = [TB_PERSONAL_RATES, TB_TEAM_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_BILLED, TB_BILLING_OWNER, TB_TEAM_RAW];
 let _skipSync = false;
 
 function pushToFirebase(key, data) {
@@ -533,7 +537,8 @@ function applySyncedValue(key, value) {
   else if (key === TB_BILLED) loadBilled();
   else if (key === TB_BILLING_OWNER) loadBillingOwner();
   else if (key === TB_TEAM_RAW) restoreTeamRaw();
-  // TB_PERSONAL_RATES is read on demand via loadPersonalRates(), no in-memory cache
+  // TB_PERSONAL_RATES / TB_TEAM_RATES 都是 read-on-demand(loadPersonalRates / loadTeamRates),
+  // 無 in-memory cache,localStorage 寫入後靠呼叫端的 renderAll() 重繪即生效
   _skipSync = false;
 }
 
@@ -793,6 +798,45 @@ function onPersonalRateChange(input) {
   const subject = input.dataset.subject;
   setPersonalRate(canonical, subject, input.value);
   renderAll();
+}
+
+// ===== Team rate override =====
+// 預設 Team 時薪吃 Excel 帶入值;這裡是「手動覆蓋」,只在少數情況用。
+// key = Team 學生去重後的唯一姓名(= teamKey 去掉 't:' 前綴),跟 sourceKey 同一身份。
+// 走 TB_TEAM_RATES,已在 SYNC_KEYS → 任一裝置改了會 pushToFirebase,其他裝置 child_changed 收到後 renderAll()。
+function loadTeamRates() {
+  try { return JSON.parse(localStorage.getItem(TB_TEAM_RATES)) || {}; }
+  catch { return {}; }
+}
+function saveTeamRates(rates) {
+  try { localStorage.setItem(TB_TEAM_RATES, JSON.stringify(rates)); } catch {}
+  pushToFirebase(TB_TEAM_RATES, rates);
+}
+// 回傳手動覆蓋值(數字),沒設定回 null(代表「用 Excel 的」)
+function getTeamRateOverride(name) {
+  const rates = loadTeamRates();
+  const v = rates[name];
+  return (v !== undefined && v !== null && v !== '' && !isNaN(Number(v)) && Number(v) > 0) ? Number(v) : null;
+}
+function setTeamRateOverride(name, value) {
+  const rates = loadTeamRates();
+  if (value === '' || value === null || value === undefined || isNaN(Number(value)) || Number(value) <= 0) {
+    delete rates[name];   // 留空 / 非正數 → 清除覆蓋,恢復 Excel
+  } else {
+    rates[name] = String(Number(value));
+  }
+  saveTeamRates(rates);
+}
+// 點 ✎ 按鈕:跳輸入框改 Team 時薪(留空恢復 Excel 帶入值)
+function editTeamRate(name, excelRate) {
+  const current = getTeamRateOverride(name);
+  const promptVal = current !== null ? String(current) : '';
+  const v = prompt(`手動修改「${name}」的時薪\n(目前 Excel 帶入:${excelRate};留空清除手動值、恢復 Excel)`, promptVal);
+  if (v === null) return;               // 按取消
+  setTeamRateOverride(name, v.trim());
+  renderAll();
+  const ov = getTeamRateOverride(name);
+  showToast(ov !== null ? `已手動設定時薪:${ov}` : `已恢復 Excel 時薪:${excelRate}`);
 }
 
 // ===== State =====
@@ -1313,6 +1357,10 @@ function buildOneFromPersonal(s, keyOverride, displayNameOverride) {
 function buildOneFromTeam(s, keyOverride, displayNameOverride) {
   const sourceKey = teamKey(s.name);
   const customName = !keyOverride ? getRename(sourceKey) : null;
+  // 手動覆蓋時薪(沒設 → null → 用 Excel 帶入的 s.rate);有覆蓋就用覆蓋值重算學費
+  const rateOverride = getTeamRateOverride(s.name);
+  const effRate = rateOverride !== null ? rateOverride : s.rate;
+  const effFee  = rateOverride !== null ? Math.round(s.totalHours * effRate) : s.totalFee;
   return {
     key: keyOverride || sourceKey,
     sourceKey,
@@ -1322,8 +1370,8 @@ function buildOneFromTeam(s, keyOverride, displayNameOverride) {
     sourceType: 'team',
     tagClass: 'tag-team',
     tagLabel: 'Team' + (s.subject ? ' · ' + s.subject : ''),
-    count: s.count, totalHours: s.totalHours, totalFee: s.totalFee,
-    rate: s.rate, subject: s.subject,
+    count: s.count, totalHours: s.totalHours, totalFee: effFee,
+    rate: effRate, excelRate: s.rate, rateIsOverride: rateOverride !== null, subject: s.subject,
     teamEntries: s.entries,
     teamScheduled: s.scheduledDates || [],
     materialFee: s.materialFee || 0,
@@ -1458,13 +1506,16 @@ function renderParentsSection(all) {
       : '';
     const owner = getBillingOwner(p.id);
     const ownerClass = ' owner-' + owner;
+    // 組內學生「全部已請款」→ 整個框變灰(比照學生池單筆已請款)
+    const laneBilled = children.length > 0 && children.every(c => isStudentBilled(c.key));
+    const laneBilledClass = laneBilled ? ' billed' : '';
     const ownerToggle = `<label class="owner-toggle" onclick="event.stopPropagation()" title="勾起來=老公請款">
       <input type="checkbox" ${owner === 'me' ? 'checked' : ''}
         onchange="setBillingOwnerFor('${escapeAttr(p.id)}', this.checked)">老公
     </label>`;
 
     return `
-      <div class="parent-lane${ownerClass}${lanePayableReadyClass}" id="parent-lane-${p.id}"
+      <div class="parent-lane${ownerClass}${laneBilledClass}${lanePayableReadyClass}" id="parent-lane-${p.id}"
            ondragover="onLaneDragOver(event, '${p.id}')"
            ondragleave="onLaneDragLeave(event)"
            ondrop="onLaneDrop(event, '${p.id}')">
@@ -1595,8 +1646,12 @@ function renderUnassignedPool(all, year, month) {
 
 function renderMathCell(s) {
   if (s.sourceType === 'team') {
-    // Team 學生:把時薪顯示在 Math cell(不可改)
-    return `<span class="cell-rate-text">時薪 ${s.rate}</span>`;
+    // Team 學生:時薪顯示在 Math cell。預設 Excel 帶入,✎ 可手動覆蓋(少數情況用)
+    const overrideTag = s.rateIsOverride
+      ? `<span style="color:#c0392b;font-size:0.72em;" title="已手動覆蓋 Excel 時薪(原 ${s.excelRate})">(手動)</span>`
+      : '';
+    return `<span class="cell-rate-text">時薪 ${s.rate}${overrideTag}
+      <button class="btn-split" title="手動修改時薪" onclick="event.stopPropagation();editTeamRate('${escapeAttr(s.originalName)}', ${Number(s.excelRate)})">✎</button></span>`;
   }
   if (!s.isMath) return '';
   const r = getPersonalRate(s.rateCanonical, 'math');
