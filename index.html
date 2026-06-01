@@ -307,11 +307,6 @@ section.team h2 { border-left-color: #3498db; }
   background: #27ae60; color: white; border-radius: 4px; cursor: pointer;
 }
 .btn-generate:hover { background: #1e8449; }
-.btn-generate-all {
-  padding: 6px 14px; background: #27ae60; color: white; border: none;
-  border-radius: 6px; font-size: 0.85em; cursor: pointer; margin-right: 8px;
-}
-.btn-generate-all:hover { background: #1e8449; }
 
 /* Results section (generated messages) */
 .results-section {
@@ -449,7 +444,6 @@ section.team h2 { border-left-color: #3498db; }
     <div class="parents-header">
       <h2>👨‍👩‍👧 家長分組</h2>
       <div class="parents-actions">
-        <button class="btn-generate-all" onclick="generateAllMessages()">📝 全部產出</button>
         <button class="btn-add-parent" onclick="addParent()">＋ 新增分組</button>
       </div>
     </div>
@@ -460,6 +454,7 @@ section.team h2 { border-left-color: #3498db; }
 
   <section class="students-pool" id="studentsPool">
     <h2>👥 學生池(未分配)</h2>
+    <div id="orphanWarning" style="display:none;margin:8px 0;padding:10px 12px;background:#fff3cd;border:1px solid #ffe08a;border-radius:8px;color:#7a5c00;font-size:0.85em;line-height:1.5;"></div>
     <div class="pool-stats" id="poolStats"></div>
     <div class="pool-columns">
       <div class="pool-column" id="poolColumnPersonal"
@@ -1324,6 +1319,16 @@ function escapeAttr(s) { return String(s).replace(/'/g, "\\'").replace(/"/g, '&q
 function personalKey(canonical) { return 'p:' + canonical; }
 function teamKey(name) { return 't:' + name; }
 
+// 「孤兒分組」防呆 ⭐:學生的分組(assignments)指向一個已不在 parents 清單裡的家長
+// (家長被刪、或跨裝置同步把 parents 蓋掉而 assignments 沒一起更新)時,該學生會「兩邊消失」:
+// 學生池排除「有分組的人」、那個家長框又不存在永遠不會被畫出來。
+// 防呆只動「顯示判斷」,不改任何 assignments / 手動設定資料(家長一旦回來會自動掛回原組)。
+function parentExists(pid) { return !!pid && parents.some(p => p.id === pid); }
+// 有效未分配 = 沒分組,或分到一個已不存在的家長 → 落回學生池讓 user 看得到、可重分
+function isEffectivelyUnassigned(key) { return !parentExists(assignments[key]); }
+// 孤兒 = 有分組記錄,但指向的家長已不存在(拿來示警)
+function isOrphanAssigned(key) { return !!assignments[key] && !parentExists(assignments[key]); }
+
 function buildOneFromPersonal(s, keyOverride, displayNameOverride) {
   const mathHrs = s.mEv.reduce((a, e) => a + e.hours, 0);
   const sciHrs = s.sEv.reduce((a, e) => a + e.hours, 0);
@@ -1578,12 +1583,25 @@ function makeStudentChip(s) {
   `;
 }
 
+function renderOrphanWarning(all) {
+  const warnDiv = document.getElementById('orphanWarning');
+  if (!warnDiv) return;
+  const orphans = all.filter(s => isOrphanAssigned(s.key));
+  if (orphans.length === 0) { warnDiv.style.display = 'none'; warnDiv.innerHTML = ''; return; }
+  const names = orphans.map(s => escapeHtml(s.displayName)).join('、');
+  warnDiv.style.display = 'block';
+  warnDiv.innerHTML = `⚠ ${orphans.length} 位學生原本的家長分組已失效(被刪或跨裝置同步覆蓋),已暫放下方學生池避免消失:<b>${names}</b>。請重新分到正確的家長分組。`;
+}
+
 function renderUnassignedPool(all, year, month) {
   const poolDiv = document.getElementById('studentsPool');
   const listP = document.getElementById('studentsListPersonal');
   const listT = document.getElementById('studentsListTeam');
   const stats = document.getElementById('poolStats');
   poolDiv.style.display = 'block';
+
+  // 孤兒分組示警(見 isOrphanAssigned):指向已不存在家長的學生,列出名字提醒 user 重分
+  renderOrphanWarning(all);
 
   if (all.length === 0) {
     stats.textContent = `${year}年${month}月:無資料`;
@@ -1592,7 +1610,7 @@ function renderUnassignedPool(all, year, month) {
     return;
   }
 
-  const unassigned = all.filter(s => !assignments[s.key]);
+  const unassigned = all.filter(s => isEffectivelyUnassigned(s.key));
   const sortFn = (a, b) => a.displayName.localeCompare(b.displayName, 'zh-Hant');
   const personalOnes = unassigned.filter(s => s.sourceType === 'personal').sort(sortFn);
   const teamOnes = unassigned.filter(s => s.sourceType === 'team').sort(sortFn);
@@ -1999,50 +2017,6 @@ function generateForStudent(studentKey) {
   }, 100);
 }
 
-function generateAllMessages() {
-  const all = buildAllStudents();
-  if (parents.length === 0 && all.length === 0) { showToast('還沒有資料'); return; }
-  let count = 0;
-  let firstError = null;
-  const [, month] = getSelectedYM();
-  const greeting = getGreeting();
-
-  parents.forEach(p => {
-    const result = buildMessageForParent(p.id, all);
-    if (!result) return;
-    if (result.error) {
-      if (!firstError) firstError = `${p.name}:${result.error}`;
-      return;
-    }
-    _generatedMessages[p.id] = result;
-    count++;
-  });
-
-  all.filter(s => !assignments[s.key]).forEach(c => {
-    const errMsg = validateRatesForChildren([c]);
-    if (errMsg) {
-      if (!firstError) firstError = errMsg;
-      return;
-    }
-    const built = buildSingleStudentMessage(c, month, greeting);
-    const storeKey = 'student:' + c.key;
-    _generatedMessages[storeKey] = {
-      parentId: storeKey, parentName: built.recipientLabel,
-      name: c.displayName, msg: built.msg,
-      totalFee: built.totalFee, totalHours: built.totalHrs, count: built.count,
-      isFamily: false,
-      studentKeys: [c.key]
-    };
-    count++;
-  });
-
-  if (count === 0) {
-    showToast(firstError || '沒有可產出的訊息');
-    return;
-  }
-  renderAll();
-  showToast(`已產出 ${count} 則訊息` + (firstError ? `(部分跳過:${firstError})` : ''));
-}
 
 function makeMsgCardHTML(parentId, m) {
   const familyTag = m.isFamily
