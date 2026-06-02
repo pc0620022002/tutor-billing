@@ -518,68 +518,209 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const fbDb = firebase.database();
 const FIXED_ROOM = 'MERGED_SYNC';
-const SYNC_KEYS = [TB_PERSONAL_RATES, TB_TEAM_RATES, TB_PARENTS, TB_ASSIGNMENTS, TB_SPLITS, TB_RENAMES, TB_BILLED, TB_BILLING_OWNER, TB_TEAM_RAW];
-let _skipSync = false;
+const TB_LWW_CLOCK = 'tb_lww_clock_v1';   // localStorage 持久化每筆資料的時間戳(跨 reload 才能正確合併)
 
-function pushToFirebase(key, data) {
-  if (_skipSync) return;
-  // localStorage 已在呼叫端同步寫好(本機不會掉);這裡是上雲端供別台同步。
-  // 失敗自動重試一次,再失敗就「明顯」告知 user —— 不讓「更新了卻沒存到雲端」靜默發生
-  // (否則 user 以為存好、另一台收不到,reload 後還可能被舊雲端值蓋回)。
-  const ref = fbDb.ref(`rooms/${FIXED_ROOM}/${key}`);
-  ref.set(data).catch(err => {
-    console.error('Firebase write failed for ' + key + ':', err);
-    ref.set(data).catch(err2 => {
-      console.error('Firebase retry failed for ' + key + ':', err2);
-      showToast('⚠ 雲端同步失敗,請檢查網路後「重做剛才這個操作」一次(否則另一台收不到)');
+// ===== 跨裝置同步:LWW-element-map(每筆帶時間戳,合併時新的贏,刪除用 tombstone)=====
+// 目標:任何一筆資料只要某次修改較新,永不被另一台較舊的寫入蓋回(根治 6/1「整組消失」)。
+// 關鍵:不整包覆蓋,改成逐筆(leaf)獨立存 + 比時間戳。所有 saveX 仍照舊呼叫 pushToFirebase(key, 整包),
+// 這裡 diff 出「真正變動的那幾筆」才寫,所以 saveX / 修改點 / 畫面邏輯全部不用動。
+//   map 型:整包就是 {leafId: value};array 型:以 idField 當 leafId。
+const LWW_SHAPES = {
+  [TB_BILLED]:         { type: 'map' },
+  [TB_ASSIGNMENTS]:    { type: 'map' },
+  [TB_BILLING_OWNER]:  { type: 'map' },
+  [TB_PERSONAL_RATES]: { type: 'map' },
+  [TB_TEAM_RATES]:     { type: 'map' },
+  [TB_PARENTS]:        { type: 'array', idField: 'id' },
+  [TB_SPLITS]:         { type: 'array', idField: 'key' },
+  [TB_RENAMES]:        { type: 'array', idField: 'sourceKey' },
+};
+const LWW_KEYS = Object.keys(LWW_SHAPES);
+
+let _skipSync = false;
+let _lastT = 0;          // 確保時間戳嚴格遞增(同毫秒多次寫也不撞)
+let _synced = {};        // key -> {leafId: value}:上次已知的真值快照(給 diff 用)
+let _clock = {};         // key -> {leafId: t};另有 _clock.__blobT__ = {key: t} 給 blob 用
+
+function nowT() { _lastT = Math.max(Date.now(), _lastT + 1); return _lastT; }
+function saveClock() { try { localStorage.setItem(TB_LWW_CLOCK, JSON.stringify(_clock)); } catch {} }
+// leafId 可能含 Firebase key 不允許的字元(. # $ [ ] /)→ 編碼;encodeURIComponent 不轉 '.' 故補手動轉
+function lwwEnc(id) { return encodeURIComponent(String(id)).replace(/\./g, '%2E'); }
+function lwwDec(s) { try { return decodeURIComponent(s); } catch (e) { return s; } }
+
+// 整包 → {leafId: value}
+function toLeafMap(key, whole) {
+  const shape = LWW_SHAPES[key]; const out = {};
+  if (!whole) return out;
+  if (shape.type === 'array') {
+    (Array.isArray(whole) ? whole : []).forEach(item => {
+      if (item && item[shape.idField] != null) out[String(item[shape.idField])] = item;
     });
+  } else {
+    Object.keys(whole).forEach(k => { out[k] = whole[k]; });
+  }
+  return out;
+}
+// {leafId: value} → 還原該 key 原本形狀(array 依 idField 字串排序,順序穩定)
+function fromLeafMap(key, map) {
+  if (LWW_SHAPES[key].type === 'array') return Object.keys(map).sort().map(id => map[id]);
+  const obj = {}; Object.keys(map).forEach(id => { obj[id] = map[id]; }); return obj;
+}
+// 雲端某 key 的 cell-map(每 cell={v,t} 或 tombstone {t,d}) → 目前「還活著」的真值 {leafId: value}
+function cloudCurrentMap(cellMap) {
+  const out = {};
+  Object.keys(cellMap || {}).forEach(enc => {
+    const c = cellMap[enc];
+    if (c && typeof c.t === 'number' && !c.d) out[lwwDec(enc)] = c.v;
   });
+  return out;
 }
 
-function applySyncedValue(key, value) {
-  // Apply Firebase value to localStorage and re-load in-memory state
-  _skipSync = true;
-  try {
-    if (value === null || value === undefined) {
-      localStorage.removeItem(key);
-    } else {
-      localStorage.setItem(key, JSON.stringify(value));
+// ★純函式★:把雲端 cell-map 合併進本地 {map, clock}。新的(t 大)或刪除(同 t 用 tombstone 優先)才採用。
+// 回傳 { map, clock, changed }。抽純函式是為了能用 node 單測(見 tools/test/lww_merge.test.js)。
+function lwwMergeMaps(localMap, localClock, incomingCells) {
+  const map = Object.assign({}, localMap);
+  const clock = Object.assign({}, localClock);
+  let changed = false;
+  Object.keys(incomingCells || {}).forEach(enc => {
+    const leaf = lwwDec(enc);
+    const cell = incomingCells[enc];
+    if (!cell || typeof cell.t !== 'number') return;
+    const localT = (leaf in clock) ? clock[leaf] : -1;
+    if (cell.t < localT) return;                               // 較舊 → 永不採用(核心保證)
+    if (cell.t === localT) {                                   // 同 t 平手 → 決定性 tie-break,兩台收斂一致
+      const localStr = (leaf in map) ? JSON.stringify(map[leaf]) : '￿';   // 已刪 = 最大
+      const incStr = cell.d ? '￿' : JSON.stringify(cell.v);
+      if (incStr <= localStr) return;
     }
-  } catch {}
+    clock[leaf] = cell.t;
+    if (cell.d) { if (leaf in map) { delete map[leaf]; changed = true; } }
+    else if (JSON.stringify(map[leaf]) !== JSON.stringify(cell.v)) { map[leaf] = cell.v; changed = true; }
+  });
+  return { map, clock, changed };
+}
+
+// 收到某 key 的雲端 cell-map → 合併 → 還原寫回 localStorage + loadX(不觸發回推)
+function lwwApply(key, incomingCells) {
+  if (!LWW_SHAPES[key]) return false;
+  const res = lwwMergeMaps(_synced[key] || {}, _clock[key] || {}, incomingCells);
+  _synced[key] = res.map; _clock[key] = res.clock; saveClock();
+  _skipSync = true;
+  try { localStorage.setItem(key, JSON.stringify(fromLeafMap(key, res.map))); } catch {}
+  reloadKey(key);
+  _skipSync = false;
+  return res.changed;
+}
+function reloadKey(key) {
   if (key === TB_PARENTS) loadParents();
   else if (key === TB_ASSIGNMENTS) loadAssignments();
   else if (key === TB_SPLITS) loadSplits();
   else if (key === TB_RENAMES) loadRenames();
   else if (key === TB_BILLED) loadBilled();
   else if (key === TB_BILLING_OWNER) loadBillingOwner();
-  else if (key === TB_TEAM_RAW) restoreTeamRaw();
-  // TB_PERSONAL_RATES / TB_TEAM_RATES 都是 read-on-demand(loadPersonalRates / loadTeamRates),
-  // 無 in-memory cache,localStorage 寫入後靠呼叫端的 renderAll() 重繪即生效
+  // rates 是 read-on-demand,localStorage 寫好即可,renderAll 會重讀
+}
+
+// 寫入:diff 整包 vs 上次已同步,只把變動的 leaf 帶時間戳寫(不整包覆蓋 → 舊裝置整包重存也蓋不掉別人)
+function pushToFirebase(key, whole) {
+  if (_skipSync) return;
+  if (!LWW_SHAPES[key]) { pushBlob(key, whole); return; }   // 非 LWW(teamRaw)走 blob
+  const newMap = toLeafMap(key, whole);
+  const oldMap = _synced[key] || {};
+  const clk = Object.assign({}, _clock[key] || {});
+  const updates = {};
+  Object.keys(newMap).forEach(leaf => {
+    if (!(leaf in oldMap) || JSON.stringify(oldMap[leaf]) !== JSON.stringify(newMap[leaf])) {
+      const t = nowT(); updates[lwwEnc(leaf)] = { v: newMap[leaf], t }; clk[leaf] = t;
+    }
+  });
+  Object.keys(oldMap).forEach(leaf => {
+    if (!(leaf in newMap)) { const t = nowT(); updates[lwwEnc(leaf)] = { t, d: 1 }; clk[leaf] = t; }
+  });
+  if (Object.keys(updates).length === 0) return;            // 沒實際變動 → 不寫
+  _synced[key] = newMap; _clock[key] = clk; saveClock();
+  lwwWrite(`rooms/${FIXED_ROOM}/lww/${key}`, updates, true);
+}
+
+// 寫 Firebase(失敗重試一次,再失敗明顯 toast;update=合併寫,set=整包寫)
+function lwwWrite(path, payload, isUpdate) {
+  const ref = fbDb.ref(path);
+  const op = () => isUpdate ? ref.update(payload) : ref.set(payload);
+  op().catch(err => {
+    console.error('Sync write failed ' + path + ':', err);
+    op().catch(err2 => {
+      console.error('Sync retry failed ' + path + ':', err2);
+      showToast('⚠ 雲端同步失敗,請檢查網路後「重做剛才這個操作」一次(否則另一台收不到)');
+    });
+  });
+}
+
+// ===== teamRaw 等大快照:單一時間戳 blob,舊同步蓋不掉新同步 =====
+function blobT(key) { return (_clock.__blobT__ && _clock.__blobT__[key]) || 0; }
+function setBlobT(key, t) { _clock.__blobT__ = _clock.__blobT__ || {}; _clock.__blobT__[key] = t; saveClock(); }
+function pushBlob(key, data) {
+  const t = nowT(); setBlobT(key, t);
+  lwwWrite(`rooms/${FIXED_ROOM}/blob/${key}`, { data, t }, false);
+}
+function applyBlob(key, cell) {
+  if (!cell || typeof cell.t !== 'number') return;
+  if (cell.t < blobT(key)) return;                          // 舊同步 → 忽略
+  setBlobT(key, cell.t);
+  _skipSync = true;
+  try { localStorage.setItem(key, JSON.stringify(cell.data)); } catch {}
+  if (key === TB_TEAM_RAW) restoreTeamRaw();
   _skipSync = false;
 }
 
-function setupFirebaseSync() {
-  const ref = fbDb.ref(`rooms/${FIXED_ROOM}`);
-  // Initial pull: overwrite local state with cloud snapshot (prevents empty-localStorage from clobbering cloud)
-  ref.once('value').then(snap => {
-    const data = snap.val() || {};
-    SYNC_KEYS.forEach(k => {
-      if (data[k] !== undefined && data[k] !== null) applySyncedValue(k, data[k]);
-    });
-    onDataUpdated();
-  }).catch(err => console.error('Firebase initial pull failed:', err));
+// 開機:從 localStorage 把 _synced/_clock 種起來(既有本地資料給 t=0 當底,任何真實編輯都會以較新 t 蓋過)
+function lwwInit() {
+  try { _clock = JSON.parse(localStorage.getItem(TB_LWW_CLOCK)) || {}; } catch { _clock = {}; }
+  LWW_KEYS.forEach(key => {
+    let whole; try { whole = JSON.parse(localStorage.getItem(key)); } catch { whole = null; }
+    const map = toLeafMap(key, whole);
+    _synced[key] = map;
+    const clk = _clock[key] || {};
+    Object.keys(map).forEach(leaf => { if (!(leaf in clk)) clk[leaf] = 0; });
+    _clock[key] = clk;
+  });
+  saveClock();
+}
 
-  // Listen for live changes from other devices
-  ref.on('child_changed', snap => {
-    if (!SYNC_KEYS.includes(snap.key)) return;
-    applySyncedValue(snap.key, snap.val());
-    renderAll();
-  });
-  ref.on('child_added', snap => {
-    if (!SYNC_KEYS.includes(snap.key)) return;
-    applySyncedValue(snap.key, snap.val());
-    renderAll();
-  });
+function setupFirebaseSync() {
+  lwwInit();
+  const rootRef = fbDb.ref(`rooms/${FIXED_ROOM}`);
+
+  // 初次:合併雲端(含遷移舊扁平資料以 t=0 灌底)→ 救回本地未推 + 套用遠端 + 刪除生效,再把本地較新/獨有的補推上雲
+  rootRef.once('value').then(snap => {
+    const root = snap.val() || {};
+    const lww = root.lww || {};
+    const blob = root.blob || {};
+    LWW_KEYS.forEach(key => {
+      let incoming = lww[key];
+      if (!incoming && root[key] != null) {            // 遷移:雲端還是舊扁平 → 當 t=0 的底
+        incoming = {};
+        const legacy = toLeafMap(key, root[key]);
+        Object.keys(legacy).forEach(leaf => { incoming[lwwEnc(leaf)] = { v: legacy[leaf], t: 0 }; });
+      }
+      if (incoming) lwwApply(key, incoming);            // 合併雲端→本地(_synced[key] 變成合併結果)
+      // 把本地較新/獨有的 leaf 補推:暫時把 _synced 當作「雲端現值」,讓 diff 推出差異
+      const merged = _synced[key];
+      _synced[key] = cloudCurrentMap(lww[key]);
+      pushToFirebase(key, fromLeafMap(key, merged));    // 內部會把 _synced 設回 merged
+    });
+    // teamRaw blob(遷移舊扁平 → t=0)
+    if (blob[TB_TEAM_RAW]) applyBlob(TB_TEAM_RAW, blob[TB_TEAM_RAW]);
+    else if (root[TB_TEAM_RAW] != null) applyBlob(TB_TEAM_RAW, { data: root[TB_TEAM_RAW], t: 0 });
+    onDataUpdated();
+  }).catch(err => console.error('Firebase initial sync failed:', err));
+
+  // 別台即時變更
+  const lwwRef = fbDb.ref(`rooms/${FIXED_ROOM}/lww`);
+  lwwRef.on('child_changed', snap => { if (LWW_SHAPES[snap.key]) { lwwApply(snap.key, snap.val()); renderAll(); } });
+  lwwRef.on('child_added',   snap => { if (LWW_SHAPES[snap.key]) { lwwApply(snap.key, snap.val()); renderAll(); } });
+  const blobRef = fbDb.ref(`rooms/${FIXED_ROOM}/blob`);
+  blobRef.on('child_changed', snap => { if (snap.key === TB_TEAM_RAW) { applyBlob(snap.key, snap.val()); renderAll(); } });
+  blobRef.on('child_added',   snap => { if (snap.key === TB_TEAM_RAW) { applyBlob(snap.key, snap.val()); renderAll(); } });
 }
 
 // ===== Parents / Assignments / Splits / Renames =====
@@ -860,7 +1001,7 @@ function onPersonalRateChange(input) {
 // ===== Team rate override =====
 // 預設 Team 時薪吃 Excel 帶入值;這裡是「手動覆蓋」,只在少數情況用。
 // key = Team 學生去重後的唯一姓名(= teamKey 去掉 't:' 前綴),跟 sourceKey 同一身份。
-// 走 TB_TEAM_RATES,已在 SYNC_KEYS → 任一裝置改了會 pushToFirebase,其他裝置 child_changed 收到後 renderAll()。
+// 走 TB_TEAM_RATES,已在 LWW_SHAPES → 任一裝置改了會逐筆同步,其他裝置收到後 renderAll()。
 function loadTeamRates() {
   try { return JSON.parse(localStorage.getItem(TB_TEAM_RATES)) || {}; }
   catch { return {}; }
