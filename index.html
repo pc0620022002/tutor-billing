@@ -388,7 +388,7 @@ section.team h2 { border-left-color: #3498db; }
   <p class="subtitle">Personal + Team 整合 / 第一階段開發中</p>
 
   <div class="round-banner">
-    🚧 R4:上傳 → 學生池(分 Personal/Team)→ <strong>家長分組可選</strong> → 一對多 → 訊息產出 + 跨裝置同步。後續會補:已請款、可請款日、教材費。
+    Team 班表可<strong>直接從 Google Sheet 同步(當月+上月)</strong>,或手動上傳 Excel → 學生池(分 Personal/Team)→ 家長分組 → 一對多 → 訊息產出 + 跨裝置同步。
   </div>
 
   <section>
@@ -412,11 +412,18 @@ section.team h2 { border-left-color: #3498db; }
   </section>
 
   <section class="team">
-    <h2>📊 Team：班表 Excel</h2>
+    <h2>📊 Team：班表</h2>
+    <div style="margin-bottom:10px;">
+      <button type="button" id="btnSyncSheet" onclick="loadTeamFromGAS()"
+        style="padding:8px 14px; font-size:14px; background:#16a34a; color:#fff; border:none; border-radius:6px; cursor:pointer;">
+        🔄 從 Google Sheet 同步(當月+上月)
+      </button>
+      <span id="sheetSyncStatus" style="margin-left:10px; font-size:13px; color:#666;"></span>
+    </div>
     <div class="upload-row">
       <div class="upload-box team" id="uploadExcel" onclick="document.getElementById('fileExcel').click()">
         <div class="icon">📂</div>
-        <div class="label">班表 Excel</div>
+        <div class="label">或手動上傳班表 Excel</div>
         <p>點擊或拖曳 .xlsx / .xls 檔案</p>
         <div class="file-name" id="fileNameExcel"></div>
         <input type="file" id="fileExcel" accept=".xlsx,.xls">
@@ -489,6 +496,12 @@ const TB_SPLITS = 'tb_splits_v1';
 const TB_RENAMES = 'tb_renames_v1';
 const TB_BILLED = 'tb_billed_v1';
 const TB_BILLING_OWNER = 'tb_billing_owner_v1';
+
+// ===== Team 班表 Google Sheet 自動讀取(GAS Web App,JSONP 繞 CORS)=====
+// 部署 GAS 後把 exec 網址填進 GAS_TEAM_URL;TEAM_TOKEN 要跟 GAS 端一致。
+// 部署步驟見 tools/gas/team_sheet/SETUP.md
+const GAS_TEAM_URL = 'https://script.google.com/macros/s/AKfycbz0oqqCpER0dhwdZp6A48yq81okwqSkrDT6gqT6JIO0tHwWm0HmCFVeb7MSBwShfe-R/exec';
+const GAS_TEAM_TOKEN = 'TBTEAM_k7n2qx9w';
 
 // ===== Firebase setup (cross-device sync) =====
 // Same Realtime DB as personal/team versions (project: tutor-billing-sync),
@@ -1189,6 +1202,75 @@ async function loadExcel(file) {
     onDataUpdated();
     showToast(`Team Excel 已載入 ${students.length} 位學生`);
   } catch (err) { showToast('Excel 解析失敗：' + err.message); }
+}
+
+// ===== 從 Google Sheet 讀 Team 班表(GAS Web App + JSONP,繞 CORS,同 ap-question-bank 做法) =====
+// GAS 回傳「當月 + 上月」兩個分頁的原始二維陣列,前端用既有 parseTeamStudents() 解析,
+// 兩個月合併進 teamStudents(月份選擇器會自動冒出兩個月可切)。
+function fetchTeamFromGAS() {
+  return new Promise((resolve, reject) => {
+    if (!GAS_TEAM_URL) { reject(new Error('尚未設定 GAS_TEAM_URL(請先部署 GAS 並填網址)')); return; }
+    const cb = 'team_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    const s = document.createElement('script');
+    let done = false;
+    const cleanup = () => { try { delete window[cb]; } catch (e) { window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); };
+    const timer = setTimeout(() => { if (done) return; done = true; cleanup(); reject(new Error('連線逾時(20 秒)')); }, 20000);
+    window[cb] = (resp) => { if (done) return; done = true; clearTimeout(timer); cleanup(); resolve(resp); };
+    s.onerror = () => { if (done) return; done = true; clearTimeout(timer); cleanup(); reject(new Error('載入失敗(GAS 網址或網路問題)')); };
+    s.src = `${GAS_TEAM_URL}?token=${encodeURIComponent(GAS_TEAM_TOKEN)}&callback=${cb}&_=${Date.now()}`;
+    document.body.appendChild(s);
+  });
+}
+
+async function loadTeamFromGAS() {
+  const statusEl = document.getElementById('sheetSyncStatus');
+  const btn = document.getElementById('btnSyncSheet');
+  if (btn) btn.disabled = true;
+  if (statusEl) { statusEl.textContent = '同步中…'; statusEl.style.color = '#666'; }
+  try {
+    const resp = await fetchTeamFromGAS();
+    if (!resp || !resp.ok) throw new Error((resp && resp.err) || '回應格式錯誤');
+    const months = resp.months || [];
+    const merged = [];
+    const skipped = [];
+    const dupSeries = [];
+    const loadedNames = [];
+    const missingNames = [];
+    months.forEach(mo => {
+      if (!mo || !mo.found) { if (mo) missingNames.push(mo.name); return; }
+      try {
+        const students = parseTeamStudents(mo.values);
+        (students._skipped || []).forEach(x => skipped.push(`[${mo.name}] ${x}`));
+        (students._dupSeries || []).forEach(x => dupSeries.push(`[${mo.name}] ${x}`));
+        merged.push(...students);
+        loadedNames.push(`${mo.name}(${students.length}人)`);
+      } catch (err) {
+        // 單一分頁格式不符(例:找不到「日期」表頭)→ 只跳過該月,不讓整批掛掉
+        skipped.push(`[${mo.name}] 整個分頁解析失敗:${err.message}`);
+      }
+    });
+    if (merged.length === 0) {
+      if (statusEl) { statusEl.textContent = '❌ 沒讀到任何學生(檢查分頁名 / 格式)'; statusEl.style.color = '#dc2626'; }
+      showTeamParseNotice(skipped, dupSeries);
+      showToast('Google Sheet 同步:沒讀到資料');
+      return;
+    }
+    teamStudents = merged;
+    document.getElementById('uploadExcel').classList.add('loaded');
+    let label = `Google Sheet:${loadedNames.join('、')}`;
+    if (missingNames.length) label += `;缺分頁 ${missingNames.join('、')}`;
+    document.getElementById('fileNameExcel').textContent = label;
+    showTeamParseNotice(skipped, dupSeries);
+    cacheTeamRaw();
+    onDataUpdated();
+    if (statusEl) { statusEl.textContent = `✅ 已同步 ${loadedNames.join('、')}`; statusEl.style.color = '#16a34a'; }
+    showToast(`已從 Google Sheet 同步 ${merged.length} 位學生`);
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = '❌ ' + err.message; statusEl.style.color = '#dc2626'; }
+    showToast('Google Sheet 同步失敗:' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // 顯示 / 收起 解析時的細節(跳過欄、同名加序號),點檔名旁的訊息可展開
