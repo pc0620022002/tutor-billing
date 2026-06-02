@@ -39,6 +39,13 @@ function doGet(e) {
   var p = (e && e.parameter) || {};
   if (p.token !== TEAM_TOKEN) return reply_(p, { ok: false, err: 'bad token' });
 
+  // 寫回「已請款」:在指定分頁、C 欄「匯出帳號」的下一列、對應學生欄打 OK(或清空)
+  //   sheet = 分頁名(如 2026.6);cols = 學生欄的 0-based index(逗號分隔,= 前端 srcCol);
+  //   value = 'OK'(勾選)或 'clear'(取消勾選,清空那格)
+  if (p.action === 'markBilled') {
+    return reply_(p, markBilled_(p.sheet, p.cols, p.value));
+  }
+
   // 用台北時區算「當月、上月」,不依賴 Apps Script 專案的時區設定
   var now = new Date();
   var y = Number(Utilities.formatDate(now, TZ, 'yyyy'));
@@ -64,6 +71,32 @@ function readMonth_(y, m) {
     }
   }
   return { name: candidates[0], found: false, values: [] };
+}
+
+// 寫回「已請款」OK 到 C 欄「匯出帳號」的下一列、指定學生欄
+function markBilled_(sheetName, colsStr, value) {
+  if (!sheetName) return { ok: false, err: 'missing sheet' };
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sh = ss.getSheetByName(sheetName);
+  if (!sh) return { ok: false, err: '找不到分頁 ' + sheetName };
+
+  // C 欄(第 3 欄)找「匯出帳號」那一列(1-based)
+  var lastRow = sh.getLastRow();
+  var colC = sh.getRange(1, 3, lastRow, 1).getValues();
+  var rowExport = -1;
+  for (var i = 0; i < colC.length; i++) {
+    if (String(colC[i][0]).trim() === '匯出帳號') { rowExport = i + 1; break; }
+  }
+  if (rowExport === -1) return { ok: false, err: '找不到「匯出帳號」列' };
+  var targetRow = rowExport + 1;
+
+  var cellVal = (value === 'clear') ? '' : 'OK';
+  var cols = String(colsStr || '').split(',').filter(function (x) { return x !== ''; }).map(Number);
+  cols.forEach(function (c0) {
+    if (c0 >= 0) sh.getRange(targetRow, c0 + 1).setValue(cellVal); // c0 = 0-based,getRange 要 1-based
+  });
+  SpreadsheetApp.flush(); // 懶寫入保險:確保 client 之後讀得到(見全域教訓 GAS flush)
+  return { ok: true, sheet: sheetName, row: targetRow, written: cols.length, value: cellVal };
 }
 
 // 日期 cell → 'yyyy-MM-dd' 字串(避免 JSON 序列化成 UTC 造成日期偏一天);

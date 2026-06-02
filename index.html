@@ -633,6 +633,47 @@ function setBilledForStudents(studentKeys, checked) {
     else delete billed[bk];
   });
   saveBilled();
+  writeBilledToSheet(studentKeys, checked, y, m);
+}
+
+// 把「已請款」寫回 Google Sheet 的「匯出帳號」下一列(只對「從 Sheet 同步來、當月」的 Team 學生有效;
+// Personal 學生、手動 Excel 來源沒有 sheetName/srcCol → 自動略過)
+function writeBilledToSheet(studentKeys, checked, y, m) {
+  if (!GAS_TEAM_URL) return;
+  const bySheet = {};   // sheetName -> [srcCol, ...]
+  studentKeys.forEach(k => {
+    const s = teamStudents.find(t => t.year === y && t.month === m && ('t:' + t.name) === k
+      && t.sheetName && t.srcCol != null);
+    if (!s) return;
+    (bySheet[s.sheetName] = bySheet[s.sheetName] || []).push(s.srcCol);
+  });
+  const sheetNames = Object.keys(bySheet);
+  if (sheetNames.length === 0) return;   // 沒有可寫回的(Personal / 手動 Excel 來源)
+  sheetNames.forEach(sheetName => {
+    gasMarkBilled(sheetName, bySheet[sheetName], checked)
+      .then(r => {
+        if (r && r.ok) showToast(`Sheet ${sheetName}：已${checked ? '打' : '清'} OK ×${r.written}`);
+        else showToast(`Sheet 寫回失敗:${(r && r.err) || '未知'}`);
+      })
+      .catch(e => showToast(`Sheet 寫回失敗:${e.message}`));
+  });
+}
+
+// 呼叫 GAS markBilled(JSONP,回傳可靠 ok/err;寫 'OK' 為冪等,重複觸發無害)
+function gasMarkBilled(sheetName, cols, checked) {
+  return new Promise((resolve, reject) => {
+    const cb = 'mb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    const s = document.createElement('script');
+    let done = false;
+    const cleanup = () => { try { delete window[cb]; } catch (e) { window[cb] = undefined; } if (s.parentNode) s.parentNode.removeChild(s); };
+    const timer = setTimeout(() => { if (done) return; done = true; cleanup(); reject(new Error('逾時')); }, 20000);
+    window[cb] = (resp) => { if (done) return; done = true; clearTimeout(timer); cleanup(); resolve(resp); };
+    s.onerror = () => { if (done) return; done = true; clearTimeout(timer); cleanup(); reject(new Error('連線失敗')); };
+    s.src = `${GAS_TEAM_URL}?token=${encodeURIComponent(GAS_TEAM_TOKEN)}&action=markBilled`
+      + `&sheet=${encodeURIComponent(sheetName)}&cols=${encodeURIComponent(cols.join(','))}`
+      + `&value=${checked ? 'OK' : 'clear'}&callback=${cb}&_=${Date.now()}`;
+    document.body.appendChild(s);
+  });
 }
 function isMessageBilled(m) {
   if (!m.studentKeys || m.studentKeys.length === 0) return false;
@@ -1075,7 +1116,8 @@ function parseTeamStudents(data) {
       scheduledDates: scheduledDates.sort((a, b) => a - b),
       totalHours, totalFee: Math.round(totalFee), count: entries.length,
       materialFee,
-      month, year
+      month, year,
+      srcCol: col   // 來源欄位 0-based index;Google Sheet 同步來的會用它寫回「已請款」OK(見 writeBilledToSheet)
     });
   }
 
@@ -1242,6 +1284,8 @@ async function loadTeamFromGAS() {
         const students = parseTeamStudents(mo.values);
         (students._skipped || []).forEach(x => skipped.push(`[${mo.name}] ${x}`));
         (students._dupSeries || []).forEach(x => dupSeries.push(`[${mo.name}] ${x}`));
+        // 標上實際分頁名(如 '2026.5'),寫回「已請款」OK 時要指定分頁(見 writeBilledToSheet)
+        students.forEach(s => { s.sheetName = mo.name; });
         merged.push(...students);
         loadedNames.push(`${mo.name}(${students.length}人)`);
       } catch (err) {
