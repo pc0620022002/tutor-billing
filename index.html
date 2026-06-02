@@ -523,8 +523,16 @@ let _skipSync = false;
 
 function pushToFirebase(key, data) {
   if (_skipSync) return;
-  fbDb.ref(`rooms/${FIXED_ROOM}/${key}`).set(data).catch(err => {
+  // localStorage 已在呼叫端同步寫好(本機不會掉);這裡是上雲端供別台同步。
+  // 失敗自動重試一次,再失敗就「明顯」告知 user —— 不讓「更新了卻沒存到雲端」靜默發生
+  // (否則 user 以為存好、另一台收不到,reload 後還可能被舊雲端值蓋回)。
+  const ref = fbDb.ref(`rooms/${FIXED_ROOM}/${key}`);
+  ref.set(data).catch(err => {
     console.error('Firebase write failed for ' + key + ':', err);
+    ref.set(data).catch(err2 => {
+      console.error('Firebase retry failed for ' + key + ':', err2);
+      showToast('⚠ 雲端同步失敗,請檢查網路後「重做剛才這個操作」一次(否則另一台收不到)');
+    });
   });
 }
 
